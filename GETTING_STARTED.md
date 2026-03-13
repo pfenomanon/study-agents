@@ -179,26 +179,88 @@ Encryption in transit:
 - For internet-facing deployments, terminate TLS in front of these services (Caddy/Nginx/Traefik/ALB).
 - Use `https://` URLs from remote clients; do not expose Supabase Docker ports publicly.
 
-## 4) Windows Client Install (`local-run/`)
+## 4) Client Install (Windows PC and macOS)
 
-Use this when running screen capture on a Windows machine and sending questions/images to the VPS.
+Use `local-run/` when running screenshot capture on an end-user machine and sending OCR/questions to the VPS APIs.
 
-```cmd
-cd local-run
-install_client.bat
+### 4.1 Windows PC (no preinstalled dependencies assumed)
+
+If Git is not installed yet, install it first:
+
+```powershell
+winget install --id Git.Git -e --source winget
 ```
 
-Then edit:
+If the user already has the repository cloned, one-liner install from repo root:
+
+```cmd
+cd local-run && install_client.bat
+```
+
+Fresh-machine one-liner from PowerShell (install + clone + setup):
+
+```powershell
+winget install --id Git.Git -e --source winget; git clone git@github.com:pfenomanon/study-agents.git; cd study-agents\local-run; cmd /c install_client.bat
+```
+
+Note: this repository is private. The clone command requires a GitHub account with access and an SSH key already added to that account.
+
+The installer attempts:
+- Python 3.11 install via `winget` if missing
+- virtualenv creation
+- dependency install in `local-run/study-agents/.venv`
+
+Configure:
 - `local-run/client_config.bat`
 
 Set:
-- `VPS_BASE_URL=http://<your-vps-host>:8000`
-- `REMOTE_API_TOKEN=<token>` if backend `API_TOKEN` is set
+- `VPS_BASE_URL=https://<your-domain-or-ip>`
+- `REMOTE_API_TOKEN=<token>` if backend `API_TOKEN` is enabled
 
-Run:
+Run (from `local-run`):
 - `run_remote_image.bat` (preferred)
 - `run_remote_text.bat` (fallback)
 - `test_remote_api.bat` (connectivity check)
+
+### 4.2 macOS (no preinstalled dependencies assumed)
+
+If the user already has the repository cloned, one-liner install from repo root:
+
+```bash
+cd local-run && chmod +x install_client_macos.sh && ./install_client_macos.sh
+```
+
+Fresh-machine one-liner from Terminal (install + clone + setup):
+
+```bash
+command -v brew >/dev/null 2>&1 || NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; (eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"; brew install git); git clone git@github.com:pfenomanon/study-agents.git; cd study-agents/local-run; chmod +x install_client_macos.sh; ./install_client_macos.sh
+```
+
+Note: this repository is private. The clone command requires a GitHub account with access and an SSH key already added to that account.
+
+The installer attempts:
+- Homebrew install if missing
+- Python 3.11 install via Homebrew if missing
+- Git install via Homebrew if missing
+- virtualenv creation
+- dependency install in `local-run/study-agents/.venv`
+- `client_config.sh` creation from template
+
+Configure:
+- `local-run/client_config.sh`
+
+Set:
+- `VPS_BASE_URL=https://<your-domain-or-ip>`
+- `REMOTE_API_TOKEN=<token>` if backend `API_TOKEN` is enabled
+
+Run (from `local-run`):
+- `./run_remote_image.sh` (preferred)
+- `./run_remote_text.sh` (fallback)
+- `./test_remote_api.sh` (connectivity check)
+
+macOS permission note:
+- Grant Screen Recording (and optionally Accessibility) to Terminal/iTerm in:
+  - System Settings -> Privacy & Security
 
 ## 5) `.env` Parameter Reference
 

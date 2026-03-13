@@ -2,18 +2,25 @@
 
 Use this package on each Windows local machine.
 
-## 1) Extract and open Command Prompt
+## 1) Open a terminal
 
-```cmd
-study-agents-windows-client-20260311-025842.zip
+Use Command Prompt or PowerShell.
+
+## 2) Fresh machine one-liner (no dependencies)
+
+PowerShell:
+
+```powershell
+winget install --id Git.Git -e --source winget; git clone git@github.com:pfenomanon/study-agents.git; cd study-agents\local-run; cmd /c install_client.bat
 ```
 
-Extract the ZIP, then open Command Prompt in the extracted folder.
+`install_client.bat` attempts to install Python 3.11 via `winget` if missing, creates `.venv`, and installs dependencies.
+This repository is private; cloning requires GitHub repo access and an SSH key already configured on the GitHub account.
 
-## 2) Install everything
+If the repo is already cloned, use:
 
 ```cmd
-install_client.bat
+cd local-run && install_client.bat
 ```
 
 ## 3) Configure endpoint
@@ -22,7 +29,7 @@ Edit:
 - `client_config.bat`
 
 Set:
-- `VPS_BASE_URL=http://<your-vps-ip>:8000`
+- `VPS_BASE_URL=https://<your-vps-domain-or-ip>`
 - `REMOTE_API_TOKEN=<token>` (only if backend has `API_TOKEN` set)
 
 ## 4) Run
@@ -30,19 +37,19 @@ Set:
 Preferred:
 
 ```cmd
-run_remote_image.bat
+cd local-run && run_remote_image.bat
 ```
 
 Fallback (local OCR, remote answer):
 
 ```cmd
-run_remote_text.bat
+cd local-run && run_remote_text.bat
 ```
 
 Connectivity test:
 
 ```cmd
-test_remote_api.bat
+cd local-run && test_remote_api.bat
 ```
 
 Controls:

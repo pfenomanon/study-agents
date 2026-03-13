@@ -100,6 +100,31 @@ Recommended security hardening:
 - `API_TOKEN` for `/cag-answer` and `/cag-ocr-answer`
 - `COPILOT_API_KEY` for `/copilot/*`
 
+### 3.3.1 Personalize Prompts for Your Use Case (Important)
+
+Run this before first ingestion/RAG build so extraction and reasoning align with your domain.
+If you skip this, prompt defaults may bias terminology and relationships toward legacy examples,
+which can reduce retrieval quality for non-insurance use cases.
+
+From `backend-vps`:
+
+```bash
+python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --apply --check
+```
+
+Example:
+
+```bash
+python3 scripts/domain_wizard.py --interactive --profile-name healthcare --apply --check
+```
+
+What this updates in one step:
+- `prompts/kg_entity_extraction.txt`
+- `prompts/kg_edge_extraction.txt`
+- `prompts/vision_reasoning.txt`
+
+After you finish the wizard, continue with schema setup and service startup.
+
 ### 3.4 Create Supabase Schema
 
 Run `backend-vps/supabase_schema.sql` in the Supabase target selected above (cloud or local).
@@ -299,43 +324,78 @@ Important groups:
 
 The core RAG/CAG pipeline is reusable, but some defaults are insurance-oriented.
 
-### 6.1 Prompt Files You Should Review First
+### 6.1 Domain Wizard (Recommended)
+
+The repo includes a profile-driven wizard to regenerate these prompts with locked contracts
+and domain-specific wording in one pass:
+- `kg_entity_extraction.txt`
+- `kg_edge_extraction.txt`
+- `vision_reasoning.txt`
+
+```bash
+cd backend-vps
+python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --apply --check
+```
+
+Non-interactive apply from an existing profile:
+
+```bash
+python3 scripts/domain_wizard.py --profile-name <your-domain> --apply --check
+```
+
+Optional target-specific generation:
+
+```bash
+python3 scripts/domain_wizard.py --profile-name <your-domain> --targets entity,edge --apply --check
+```
+
+Default profile location:
+- `backend-vps/domain/profiles/generic.json`
+
+Template sources:
+- `backend-vps/prompts/templates/kg_entity_extraction.base.txt`
+- `backend-vps/prompts/templates/kg_edge_extraction.base.txt`
+- `backend-vps/prompts/templates/vision_reasoning.base.txt`
+
+Generated output:
+- `backend-vps/prompts/kg_entity_extraction.txt`
+- `backend-vps/prompts/kg_edge_extraction.txt`
+- `backend-vps/prompts/vision_reasoning.txt`
+
+### 6.2 Prompt Files You Should Review First
 
 Under `backend-vps/prompts/`:
 
 - `vision_reasoning.txt`
-  - currently starts with Texas insurance adjuster persona
+  - starts with a subject-matter-expert role and may still need domain-specific phrasing
 - `kg_entity_extraction.txt`
-  - currently optimized for insurance-study entities and examples
+  - generated from profile/template via `scripts/domain_wizard.py`
 - `cag_answer_generation.txt`
-  - generic, but still includes multiple-choice wording
+  - generic, but may include format assumptions you want to tune
 - `kg_edge_extraction.txt`
-  - "regulated industries" framing (may be fine, adjust if needed)
+  - generic graph relationship framing; update relation language for your domain
 
-Usually domain migration is done by editing these prompt files first.
-
-### 6.2 Insurance-Specific Code Paths to Know
-
-These are code-level defaults (not prompt files):
+### 6.3 Remaining Domain-Tuned Code Paths
 
 - `backend-vps/src/study_agents/scenario_api.py`
-  - schema and output structure are claims/coverage/adjuster-oriented
+  - still includes legacy insurance-named fields for backward compatibility, but now supports generic scenario wording (`scenario_type`, `primary_topic`) and configurable audience/instruction text
 - `backend-vps/src/study_agents/cag_agent.py`
-  - fallback `_DEFAULT_ANSWER_PROMPT` is insurance-adjuster specific (used only if prompt file missing)
+  - fallback `_DEFAULT_ANSWER_PROMPT` is now generic subject-matter-expert guidance
 - `backend-vps/src/study_agents/mcp_server_fixed.py`
-  - default graph question references TWIA coverage
+  - default graph inspection question is now generic
 - `backend-vps/src/study_agents/rag_builder_core.py`
-  - generated quick-test text uses insurance examples
+  - generated quick-test text is now domain-neutral
 
-If your target domain is not insurance, start with prompts; then refactor `scenario_api.py` if you plan to use scenario workflows.
+If your target domain is not insurance, start with prompt generation and then align scenario payload semantics as needed for your app.
 
-### 6.3 Suggested Personalization Order
+### 6.4 Suggested Personalization Order
 
-1. Update prompts in `backend-vps/prompts/`.
-2. Run smoke tests against `/cag-answer`.
-3. Ingest your own domain data into `data/` and run RAG build.
-4. If using Scenario API, replace insurance schema/wording in `scenario_api.py`.
-5. Re-test with domain-specific sample questions.
+1. Run domain wizard and generate `kg_entity_extraction.txt`, `kg_edge_extraction.txt`, and `vision_reasoning.txt`.
+2. Update remaining prompts in `backend-vps/prompts/`.
+3. Run smoke tests against `/cag-answer`.
+4. Ingest your own domain data into `data/` and run RAG build.
+5. If using Scenario API, align payload semantics for your app (`scenario_type`, `primary_topic`, checklist/analysis shape).
+6. Re-test with domain-specific sample questions.
 
 ## 7) Data Safety and GitHub
 

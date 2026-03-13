@@ -78,8 +78,22 @@ class TaskItem(BaseModel):
 
 class ScenarioPayload(BaseModel):
     scenario_id: str = Field(..., min_length=1, description="Unique scenario identifier.")
-    policy_type: Literal["homeowners", "dwelling", "auto", "commercial", "other"] = "homeowners"
-    peril: str
+    policy_type: str = Field(
+        default="general",
+        description="Legacy scenario type field preserved for backward compatibility.",
+    )
+    scenario_type: Optional[str] = Field(
+        default=None,
+        description="Preferred domain-specific scenario type label.",
+    )
+    peril: str = Field(
+        default="general",
+        description="Legacy primary topic/category field preserved for backward compatibility.",
+    )
+    primary_topic: Optional[str] = Field(
+        default=None,
+        description="Preferred primary scenario topic/category label.",
+    )
     loss_date: Optional[str] = None
     loss_summary: str
     coverage_profile: List[CoverageItem] = Field(default_factory=list)
@@ -114,15 +128,23 @@ class DocumentationChecklistItem(BaseModel):
     notes: Optional[str] = None
 
 
-class StructuredAdjusterAnswer(BaseModel):
+class StructuredScenarioAnswer(BaseModel):
     scenario_id: str
     question: str
     summary: str
     recommended_steps: List[str]
-    coverage_analysis: Dict[str, str]
+    analysis: Dict[str, str]
+    coverage_analysis: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Deprecated compatibility alias for `analysis`.",
+    )
     documentation_checklist: List[DocumentationChecklistItem]
     citations: List[Citation]
     raw_answer: str
+
+
+# Backward-compatible alias retained for existing imports.
+StructuredAdjusterAnswer = StructuredScenarioAnswer
 
 
 # --------------------------------------------------------------------------- #
@@ -161,12 +183,22 @@ class ScenarioRepository:
 # --------------------------------------------------------------------------- #
 
 
+def _scenario_type_value(payload: ScenarioPayload) -> str:
+    return (payload.scenario_type or payload.policy_type or "general").strip()
+
+
+def _primary_topic_value(payload: ScenarioPayload) -> str:
+    return (payload.primary_topic or payload.peril or "general").strip()
+
+
 def scenario_to_markdown(payload: ScenarioPayload) -> str:
+    scenario_type = _scenario_type_value(payload)
+    primary_topic = _primary_topic_value(payload)
     lines = [
         f"# Scenario {payload.scenario_id}",
         "",
-        f"- Policy Type: {payload.policy_type}",
-        f"- Peril: {payload.peril}",
+        f"- Scenario Type: {scenario_type}",
+        f"- Primary Topic: {primary_topic}",
     ]
     if payload.loss_date:
         lines.append(f"- Loss Date: {payload.loss_date}")
@@ -183,7 +215,7 @@ def scenario_to_markdown(payload: ScenarioPayload) -> str:
     lines.append("")
 
     if payload.coverage_profile:
-        lines.append("## Coverage Profile")
+        lines.append("## Context Profile")
         for item in payload.coverage_profile:
             line = f"- **{item.name}**"
             details = []
@@ -236,6 +268,8 @@ def ingest_scenario_markdown(
     scenario: ScenarioPayload,
     ingestion_service: KnowledgeIngestionService,
 ) -> Dict[str, int]:
+    scenario_type = _scenario_type_value(scenario)
+    primary_topic = _primary_topic_value(scenario)
     markdown = scenario_to_markdown(scenario)
     paragraphs = split_into_paragraphs(markdown)
     if not paragraphs:
@@ -251,8 +285,8 @@ def ingest_scenario_markdown(
                 text=chunk,
                 metadata={
                     "scenario_id": scenario.scenario_id,
-                    "policy_type": scenario.policy_type,
-                    "peril": scenario.peril,
+                    "scenario_type": scenario_type,
+                    "primary_topic": primary_topic,
                     "carrier_type": scenario.carrier_profile.type,
                     "carrier_name": scenario.carrier_profile.name,
                 },
@@ -265,7 +299,7 @@ def ingest_scenario_markdown(
         source_type="scenario_markdown",
         reference_time=datetime.utcnow(),
         group_id=group_id,
-        tags=["scenario", scenario.policy_type, scenario.peril],
+        tags=["scenario", scenario_type, primary_topic],
         chunks=chunk_records,
         raw_text=markdown,
         metadata={
@@ -282,10 +316,20 @@ def ingest_scenario_markdown(
 
 
 def format_question_with_context(question: str, scenario: ScenarioPayload) -> str:
+    scenario_type = _scenario_type_value(scenario)
+    primary_topic = _primary_topic_value(scenario)
+    audience = os.getenv(
+        "SCENARIO_AUDIENCE",
+        "Practitioner seeking expert peer guidance.",
+    ).strip()
+    instruction = os.getenv(
+        "SCENARIO_INSTRUCTION",
+        "Respond as a subject-matter expert advising the practitioner.",
+    ).strip()
     lines = [
         f"Scenario ID: {scenario.scenario_id}",
-        f"Policy Type: {scenario.policy_type}",
-        f"Peril: {scenario.peril}",
+        f"Scenario Type: {scenario_type}",
+        f"Primary Topic: {primary_topic}",
     ]
     if scenario.carrier_profile:
         lines.append(f"Carrier Profile: {scenario.carrier_profile.type}")
@@ -294,8 +338,8 @@ def format_question_with_context(question: str, scenario: ScenarioPayload) -> st
         if scenario.carrier_profile.playbook:
             lines.append(f"Playbook: {scenario.carrier_profile.playbook}")
     lines.append("")
-    lines.append("Audience: Desk/field adjuster seeking expert peer guidance.")
-    lines.append("Instruction: Respond as the expert adjuster advising another adjuster; never address the policyholder.")
+    lines.append(f"Audience: {audience}")
+    lines.append(f"Instruction: {instruction}")
     lines.append("")
     lines.append("Loss Summary:")
     lines.append(scenario.loss_summary)
@@ -305,12 +349,12 @@ def format_question_with_context(question: str, scenario: ScenarioPayload) -> st
     return "\n".join(lines)
 
 
-def structure_adjuster_answer(
+def structure_scenario_answer(
     cag: CAGAgent,
     scenario: ScenarioPayload,
     question: str,
     raw_answer: str,
-) -> StructuredAdjusterAnswer:
+) -> StructuredScenarioAnswer:
     def _summary_with_explanation(
         summary: str,
         coverage: Dict[str, str],
@@ -356,16 +400,16 @@ def structure_adjuster_answer(
         if summary_text:
             return (
                 f"{summary_text} Explanation: This recommendation follows the "
-                "policy context and claim facts provided."
+                "scenario context and evidence provided."
             )
-        return "Explanation: Recommendation based on provided policy context and claim facts."
+        return "Explanation: Recommendation based on provided scenario context and evidence."
 
     schema_prompt = """
 Return JSON with the following structure:
 {
   "summary": "one paragraph summary of the guidance that clearly explains why",
   "recommended_steps": ["ordered list of next actions"],
-  "coverage_analysis": {"topic": "brief analysis"},
+  "analysis": {"topic": "brief analysis"},
   "documentation_checklist": [
     {"item": "describe document", "status": "pending|received|not_applicable", "notes": ""}
   ],
@@ -378,8 +422,8 @@ Do not include any additional keys or commentary.
 
     user_prompt = (
         f"Scenario ID: {scenario.scenario_id}\n"
-        f"Policy Type: {scenario.policy_type}\n"
-        f"Peril: {scenario.peril}\n"
+        f"Scenario Type: {_scenario_type_value(scenario)}\n"
+        f"Primary Topic: {_primary_topic_value(scenario)}\n"
         f"Carrier Type: {scenario.carrier_profile.type}\n"
         f"Question: {question}\n"
         f"Answer:\n{raw_answer}\n"
@@ -393,7 +437,7 @@ Do not include any additional keys or commentary.
             messages=[
                 {
                     "role": "system",
-                    "content": "You convert answers into structured JSON for adjusters."
+                    "content": "You convert answers into structured JSON for scenario workflows."
                                + schema_prompt,
                 },
                 {"role": "user", "content": user_prompt},
@@ -405,7 +449,7 @@ Do not include any additional keys or commentary.
         structured = {
             "summary": raw_answer.strip(),
             "recommended_steps": [],
-            "coverage_analysis": {},
+            "analysis": {},
             "documentation_checklist": [],
             "citations": [],
         }
@@ -420,26 +464,40 @@ Do not include any additional keys or commentary.
         for item in structured.get("citations", [])
         if isinstance(item, dict) and "source" in item
     ]
-    coverage_analysis = structured.get("coverage_analysis") or {}
+    analysis = structured.get("analysis")
+    if not isinstance(analysis, dict) or not analysis:
+        legacy_analysis = structured.get("coverage_analysis") or {}
+        analysis = legacy_analysis if isinstance(legacy_analysis, dict) else {}
     summary = _summary_with_explanation(
         structured.get("summary", raw_answer.strip()),
-        coverage_analysis if isinstance(coverage_analysis, dict) else {},
+        analysis,
         raw_answer,
     )
     recommended_steps = structured.get("recommended_steps", [])
     if not isinstance(recommended_steps, list):
         recommended_steps = []
 
-    return StructuredAdjusterAnswer(
+    return StructuredScenarioAnswer(
         scenario_id=scenario.scenario_id,
         question=question,
         summary=summary,
         recommended_steps=recommended_steps,
-        coverage_analysis=coverage_analysis,
+        analysis=analysis,
+        coverage_analysis=analysis,
         documentation_checklist=checklist,
         citations=citations,
         raw_answer=raw_answer,
     )
+
+
+def structure_adjuster_answer(
+    cag: CAGAgent,
+    scenario: ScenarioPayload,
+    question: str,
+    raw_answer: str,
+) -> StructuredScenarioAnswer:
+    """Compatibility wrapper around `structure_scenario_answer`."""
+    return structure_scenario_answer(cag, scenario, question, raw_answer)
 
 
 # --------------------------------------------------------------------------- #
@@ -516,9 +574,11 @@ def get_scenario(scenario_id: str) -> ScenarioResponse:
 
 @app.post(
     "/scenarios/{scenario_id}/questions",
-    response_model=StructuredAdjusterAnswer,
+    response_model=StructuredScenarioAnswer,
 )
-def answer_scenario_question(scenario_id: str, payload: ScenarioQuestion) -> StructuredAdjusterAnswer:
+def answer_scenario_question(
+    scenario_id: str, payload: ScenarioQuestion
+) -> StructuredScenarioAnswer:
     try:
         scenario_response = scenario_repo.load(scenario_id)
     except FileNotFoundError as exc:
@@ -529,7 +589,7 @@ def answer_scenario_question(scenario_id: str, payload: ScenarioQuestion) -> Str
     context, raw_answer = cag_agent.answer_with_enhanced_cag(formatted_question)
     if context.strip():
         raw_answer = f"{raw_answer}\n\n[context excerpt]\n{context[:800]}"
-    structured = structure_adjuster_answer(cag_agent, scenario, payload.question, raw_answer)
+    structured = structure_scenario_answer(cag_agent, scenario, payload.question, raw_answer)
     return structured
 
 

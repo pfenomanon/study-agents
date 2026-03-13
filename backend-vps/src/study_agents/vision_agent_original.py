@@ -37,10 +37,10 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 docling = DocumentConverter()
 
 # ---------------- REASONING ROLE ----------------
-REASONING_SYSTEM = """You are a licensed Texas Property & Casualty Insurance Agent and All-Lines Adjuster.
+REASONING_SYSTEM = """You are a subject-matter-expert assistant.
 Use ONLY the retrieved CONTEXT to answer the question extracted from the screenshot.
 If the context is insufficient, respond exactly: INSUFFICIENT_CONTEXT.
-Provide reasoning concisely with Texas-specific relevance.
+Provide reasoning concisely with practical relevance.
 
 Format:
 Answer: <concise answer>

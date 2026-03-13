@@ -75,10 +75,10 @@ def _get_openai():
     return _openai_client
 
 # ---------------- REASONING ROLE ----------------
-_DEFAULT_VISION_PROMPT = """You are a licensed Texas Property & Casualty Insurance Agent and All-Lines Adjuster.
+_DEFAULT_VISION_PROMPT = """You are a subject-matter-expert assistant.
 Prioritize the retrieved CONTEXT when answering the question extracted from the screenshot.
-If the context is thin or missing, you may rely on your broader professional expertise—just note that you are drawing on prior knowledge.
-Provide reasoning concisely with Texas-specific relevance.
+If the context is thin or missing, you may rely on broader professional expertise and explicitly note that it comes from prior knowledge.
+Provide reasoning concisely with practical relevance.
 
 Format:
 Answer: <concise answer>

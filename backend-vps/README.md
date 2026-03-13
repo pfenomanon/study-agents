@@ -98,6 +98,11 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `vision_reasoning.txt`, `cag_entity_extraction.txt`, `cag_relationship_extraction.txt`, `cag_answer_generation.txt`, `cag_cluster_topic.txt`
   - `markdown_system_prompt.md` (KB capture), `web_research_system_prompt.md`
 - Edit these files (or set `PROMPTS_DIR=/path/to/prompts`) to tweak agent behavior without touching code. Changes take effect the next time the agent runs.
+- For safe domain-wide personalization, use the profile wizard to regenerate `prompts/kg_entity_extraction.txt`, `prompts/kg_edge_extraction.txt`, and `prompts/vision_reasoning.txt` with schema guardrails:
+  ```bash
+  python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --apply --check
+  ```
+  Profiles live in `domain/profiles/`; base templates live under `prompts/templates/`.
 
 ## Docker Compose
 
@@ -216,7 +221,7 @@ Press `Ctrl+C` to stop every managed process gracefully.
 
 ## Scenario Orchestration API (FastAPI)
 
-Use the Scenario API to submit structured faux-claim scenarios and retrieve Expert Adjuster responses in a consistent JSON envelope.
+Use the Scenario API to submit structured scenarios and retrieve subject-matter-expert responses in a consistent JSON envelope.
 By default it uses the same `SUPABASE_URL` / `SUPABASE_KEY` as the rest of `study-agents`; optional `SCENARIO_SUPABASE_URL` / `SCENARIO_SUPABASE_KEY` overrides are available if needed.
 
 ```bash
@@ -228,7 +233,7 @@ uvicorn study_agents.scenario_api:app --host 0.0.0.0 --port 9000
 
 Endpoints:
 
-- `POST /scenarios` – Accepts `scenario_id`, coverage profile, carrier metadata, risk flags, etc. The payload is transformed into markdown, ingested via `KnowledgeIngestionService`, and persisted under `data/scenarios/`.
+- `POST /scenarios` – Accepts `scenario_id`, scenario/context profile, optional carrier metadata, risk flags, etc. The payload is transformed into markdown, ingested via `KnowledgeIngestionService`, and persisted under `data/scenarios/`.
 - `GET /scenarios/{scenario_id}` – Returns the stored scenario alongside the most recent ingestion summary.
 - `POST /scenarios/{scenario_id}/questions` – Invokes the CAG agent with the correct playbook context and responds with a structured JSON object:
   ```json
@@ -237,7 +242,8 @@ Endpoints:
     "question": "What documentation is still required?",
     "summary": "...",
     "recommended_steps": ["Step 1", "Step 2"],
-    "coverage_analysis": {"dwelling": "...", "liability": "..."},
+    "analysis": {"topic_a": "...", "topic_b": "..."},
+    "coverage_analysis": {"topic_a": "...", "topic_b": "..."},
     "documentation_checklist": [
       {"item": "Police report", "status": "pending"},
       {"item": "Contractor estimate", "status": "received"}
@@ -247,7 +253,7 @@ Endpoints:
   }
   ```
 
-When no carrier profile is supplied, the API falls back to the [Generic P&C Playbook](docs/GENERIC_PNC_PLAYBOOK.md). Provide `carrier_profile.type="carrier"` plus `name`/`playbook` to align the language with a specific workflow.
+Carrier profile metadata is optional. Provide `carrier_profile.type="carrier"` plus `name`/`playbook` only when you want carrier/workflow-specific terminology overlays.
 
 ## Web GUI (React + Vite)
 
@@ -262,8 +268,8 @@ VITE_SCENARIO_API_URL=https://<api-domain> npm run build
 ```
 
 - `ScenarioForm` lets you capture structured scenarios (scenario_id, coverage items, carrier profile, risk flags). Each line in the coverage/evidence fields follows `Name|Limit|Deductible|Notes` to keep the UI compact while still producing structured data for the API.
-- `ScenarioQuestion` posts questions to `/scenarios/{id}/questions` and renders structured answers (summary, steps, coverage analysis, documentation checklist, citations).
-- `ScenarioView` shows the currently active scenario, ingestion stats, and the most recent Expert Adjuster response (with expandable raw answer + context).
+- `ScenarioQuestion` posts questions to `/scenarios/{id}/questions` and renders structured answers (summary, steps, analysis, documentation checklist, citations).
+- `ScenarioView` shows the currently active scenario, ingestion stats, and the most recent subject-matter-expert response (with expandable raw answer + context).
 
 Deploy the built assets behind HTTPS (Traefik/Nginx). Set `SCENARIO_API_CORS` on the API so only the GUI origin is permitted.
 

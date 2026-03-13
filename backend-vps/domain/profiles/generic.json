@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "profile_name": "generic",
+  "domain_name": "general subject-matter",
+  "assistant_role": "subject-matter-expert assistant",
+  "entity_types": [
+    "Document",
+    "Section",
+    "Requirement",
+    "RegulatoryBody",
+    "Process",
+    "Term",
+    "Concept",
+    "Role",
+    "Obligation",
+    "Risk",
+    "Timeline"
+  ],
+  "relationship_types": [
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts",
+    "depends_on",
+    "enables"
+  ],
+  "relationship_priorities": [
+    "requirements and prerequisites",
+    "process ordering and dependencies",
+    "authority and governance links",
+    "exceptions and contradictions"
+  ],
+  "topic_priorities": [
+    "core definitions and terminology",
+    "requirements and constraints",
+    "roles and responsibilities",
+    "timelines and dependencies",
+    "risks, exceptions, and limitations"
+  ],
+  "vision_focus_areas": [
+    "correctness to provided context",
+    "clear next-step guidance",
+    "explicit assumptions and limitations"
+  ],
+  "examples": [
+    "Primary process definition",
+    "Eligibility or precondition rule",
+    "Explicit limitation or exception",
+    "Responsible role and required action",
+    "Critical timeline milestone"
+  ],
+  "forbidden_terms": [
+    "TWIA",
+    "Homeowners Policy (HO-3)",
+    "licensed insurance adjuster"
+  ],
+  "allow_legacy_terms": false
+}

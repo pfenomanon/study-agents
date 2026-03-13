@@ -523,7 +523,7 @@ def build_howto_md(
             "emb=cli.embeddings.create(model='text-embedding-3-small',input=q).data[0].embedding;"
             "hits=sb.rpc('match_documents',{'query_embedding':emb,'match_threshold':0.15,'match_count':8})."
             "execute().data or [];ctx='\\n\\n---\\n'.join([h['content'] for h in hits]);"
-            "msg=f\"Answer as a licensed Texas insurance adjuster using ONLY CONTEXT. If missing, say so.\\n\\n"
+            "msg=f\"Answer as a subject-matter expert using ONLY CONTEXT. If missing, say so.\\n\\n"
             "QUESTION:\\n{q}\\n\\nCONTEXT:\\n{ctx[:12000]}\";"
             "ans=cli.chat.completions.create(model='gpt-4o-mini',messages=[{'role':'system','content':'You answer strictly from provided context.'},{'role':'user','content':msg}],temperature=0);"
             "print(ans.choices[0].message.content)\""

@@ -99,7 +99,7 @@ def build_rag_bundle(
 
 
 @mcp.tool()
-def inspect_graph(question: str = "What are the eligibility requirements for TWIA coverage?") -> dict:
+def inspect_graph(question: str = "What are the key eligibility requirements in this context?") -> dict:
     """Invoke graph_inspector to refresh Mermaid/CSV exports and answer a question."""
     process = subprocess.run(
         [sys.executable, "-m", "study_agents.graph_inspector", "--question", question],

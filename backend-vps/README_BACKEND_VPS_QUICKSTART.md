@@ -27,8 +27,22 @@ Minimum required keys in `.env`:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 
+Recommended:
+- Use a service-role key for `SUPABASE_KEY` (backend write/ingestion features).
+
+Optional local Supabase mode (Docker):
+```bash
+./scripts/setup_local_supabase.sh
+```
+This starts the local Supabase container stack and updates `.env` with local credentials.
+
 Optional security:
 - `API_TOKEN` (required by clients if set)
+- `COPILOT_API_KEY` (required for `/copilot/*` if set)
+
+Transport security:
+- Compose exposes HTTP by default.
+- Put the APIs behind HTTPS (reverse proxy/load balancer) before internet exposure.
 
 ## 4) Start backend
 
@@ -46,3 +60,9 @@ bash scripts/install_backend_vps.sh logs
 Default endpoints:
 - `POST /cag-answer` on port `8000`
 - `POST /cag-ocr-answer` on port `8000`
+- Scenario API on port `9000`
+- Copilot API on port `9010`
+
+Auth header options:
+- `X-API-Key: <token>`
+- `Authorization: Bearer <token>`

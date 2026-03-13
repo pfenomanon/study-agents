@@ -35,10 +35,51 @@ This repo now ignores these runtime folders in `.gitignore`.
 
 - Docker Engine
 - Docker Compose v2 plugin
-- outbound network access to OpenAI and Supabase
+- outbound network access to OpenAI and either:
+  - Supabase Cloud, or
+  - local Supabase Docker stack (via Supabase CLI)
 - optional: Ollama endpoint access if you plan to use Ollama runtime
 
-### 3.2 Clone and Configure
+### 3.2 Choose Supabase Mode (Cloud or Local Docker)
+
+You must choose one Supabase mode before starting app services.
+
+Mode A: Supabase Cloud (managed)
+- Use your hosted project URL/key values.
+- Set in `.env`:
+  - `SUPABASE_URL=https://<project-ref>.supabase.co`
+  - `SUPABASE_KEY=<service_role_key>`
+- Run schema in cloud project:
+  - `backend-vps/supabase_schema.sql`
+
+Mode B: Local Supabase in Docker (self-hosted on VPS)
+- Run from `backend-vps`:
+  - `chmod +x scripts/setup_local_supabase.sh`
+  - `./scripts/setup_local_supabase.sh`
+- This starts Supabase containers and updates `.env` with local `SUPABASE_URL`/`SUPABASE_KEY`.
+- The helper prefers a service-role key when available; this is needed for full write/ingestion capability.
+
+Typical local Supabase containers started by `supabase start` include:
+- `supabase_db_*` (Postgres)
+- `supabase_kong_*` (API gateway)
+- `supabase_auth_*` (GoTrue)
+- `supabase_rest_*` (PostgREST)
+- `supabase_realtime_*`
+- `supabase_storage_*`
+- `supabase_studio_*`
+- `supabase_pg_meta_*`
+- `supabase_analytics_*` (Logflare)
+- `supabase_inbucket_*`
+- `supabase_vector_*`
+
+Inspect what is running:
+
+```bash
+supabase status
+docker ps --format '{{.Names}}\t{{.Image}}' | rg -i 'supabase|study-agents'
+```
+
+### 3.3 Clone and Configure
 
 ```bash
 git clone git@github.com:pfenomanon/study-agents.git
@@ -51,15 +92,19 @@ Edit `.env` and set at minimum:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 
+Important:
+- For backend/server usage, `SUPABASE_KEY` should be a service-role key.
+- If you use local Supabase and the helper had to fall back to anon key, replace it with service-role for full ingestion and write features.
+
 Recommended security hardening:
 - `API_TOKEN` for `/cag-answer` and `/cag-ocr-answer`
 - `COPILOT_API_KEY` for `/copilot/*`
 
-### 3.3 Create Supabase Schema
+### 3.4 Create Supabase Schema
 
-Run `backend-vps/supabase_schema.sql` in your Supabase SQL editor (or via your database connection workflow).
+Run `backend-vps/supabase_schema.sql` in the Supabase target selected above (cloud or local).
 
-### 3.4 Start Services
+### 3.5 Start Services
 
 ```bash
 docker compose up -d --build
@@ -72,7 +117,19 @@ Default exposed ports:
 - `9000` `scenario-service` (Scenario API)
 - `9010` `copilot-service` (`/copilot/chat`, `/copilot/capture`, `/copilot/cag-process`)
 
-### 3.5 Smoke Tests
+### 3.6 What Runs in Docker
+
+App stack (`backend-vps/docker-compose.yml`):
+- `cag-service` (port `8000`)
+- `rag-service` (port `8100`)
+- `utility-service`
+- `copilot-service` (port `9010`)
+- `scenario-service` (port `9000`)
+- `vault` (dev mode, optional)
+
+If using local Supabase mode, those Supabase containers run in parallel as a separate stack managed by Supabase CLI.
+
+### 3.7 Smoke Tests
 
 Without API token:
 
@@ -91,13 +148,36 @@ curl -X POST http://localhost:8000/cag-answer \
   -d '{"question":"Return OK if service is reachable."}'
 ```
 
-### 3.6 Day-2 Operations
+### 3.8 Day-2 Operations
 
 ```bash
 docker compose logs -f cag-service
 docker compose restart cag-service
 docker compose down
 ```
+
+### 3.9 Security Baseline
+
+- Keep Supabase local ports bound to localhost unless you intentionally proxy them.
+- Do not expose Supabase Postgres/API ports directly to the public internet.
+- Keep only required app ports open externally (`8000`, `8100`, `9000`, `9010` as needed).
+- Always set `API_TOKEN` and `COPILOT_API_KEY` in non-local deployments.
+- Rotate keys if shared accidentally.
+
+### 3.10 Authentication and Encrypted Communication
+
+Authentication:
+- `cag-service` (`/cag-answer`, `/cag-ocr-answer`) enforces token auth when `API_TOKEN` is set.
+- `copilot-service` (`/copilot/*`) enforces token auth when `COPILOT_API_KEY` is set.
+- Accepted client headers:
+  - `X-API-Key: <token>`
+  - `Authorization: Bearer <token>`
+- `scenario-service` (`/scenarios*`) has no built-in token guard in this split package; protect it with network controls and/or reverse-proxy auth.
+
+Encryption in transit:
+- The default compose publishes plain HTTP ports (`8000`, `8100`, `9000`, `9010`).
+- For internet-facing deployments, terminate TLS in front of these services (Caddy/Nginx/Traefik/ALB).
+- Use `https://` URLs from remote clients; do not expose Supabase Docker ports publicly.
 
 ## 4) Windows Client Install (`local-run/`)
 

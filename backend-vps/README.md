@@ -18,7 +18,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
 - `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `status`, `logs`, `stop`).
-- `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
+- `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Scenario API 9000, Copilot API 9010, plus a utility image for CLIs).
 - `docker/*.Dockerfile`: per-service images; all include the `[full]` extra (vision/OCR). The root `Dockerfile` is a slim MCP/CLI image if you want a single-container runtime.
 
 ## Graph Inspector & Visualization
@@ -107,7 +107,7 @@ Use `docker compose up --build` from this directory to spin up **per-agent servi
 - `rag-service` (port 8100): exposes `POST /build` to trigger the reasoning-driven RAG bundle builder.
 - `utility-service`: base image kept running via `tail -f /dev/null` so you can `docker compose run utility-service ...` for any one-off CLI agent (web research, RAG ingestion, etc.) without rebuilding images.
 - `copilot-service` (port 9010): PydanticAI backend; now exposes `/copilot/capture` for capture + OCR + answer.
-- `copilot-frontend` (port 3000): CopilotKit UI with chat + Vision Capture card. Run on a machine with a display or attach a virtual display (Xvfb) if headless.
+- `scenario-service` (port 9000): Scenario API (`study_agents.scenario_api`) for structured scenario ingestion and Q&A.
 
 All services mount `.env`, `prompts/`, and the relevant `data/` folders so you can edit prompts or documents on the host and the containers see the changes immediately.
 
@@ -162,7 +162,7 @@ study-agents-mcp
    ```bash
    study-agents-validate --print-summary
    ```
-4. Run `supabase_schema.sql` in your new Supabase project.
+4. Run `supabase_schema.sql` in your Supabase target (cloud or local).
 5. Start the pieces you need:
    - Individually (legacy): `study-agents-rag`, `study-agents-cag`, `study-agents-graph-inspector`, `study-agents-api`
    - Orchestration helper: `study-agents-manage run --services cag,api`
@@ -208,7 +208,9 @@ Press `Ctrl+C` to stop every managed process gracefully.
 
 ## Security Hardening
 - Set API keys for service access: `API_TOKEN` (CAG HTTP API) and `COPILOT_API_KEY` (Copilot service). Clients must send `X-API-Key` or `Authorization: Bearer <token>`.
+- `scenario-service` (`/scenarios*`) is not token-guarded by default in this split package; protect it with reverse-proxy auth and/or private networking.
 - Image uploads are size/type limited (`MAX_UPLOAD_BYTES`, PNG/JPEG only). Keep endpoints behind a reverse proxy with TLS and IP allowlists where possible.
+- Compose service ports are HTTP by default (`8000/8100/9000/9010`); terminate TLS for any external/client-facing access.
 - Containers drop root privileges (`USER app`). Bind only required ports; the default compose uses an internal `backend` network.
 - Vault (optional, OSS): a Vault dev service is included in compose. If `VAULT_ADDR`/`VAULT_TOKEN` are set, containers will attempt to fetch secrets from `kv/data/study-agents/*` via `scripts/use_env.sh` and render `/env/.env.runtime`. Default is dev/root token; replace with a secure Vault deployment for production.
 
@@ -281,7 +283,29 @@ chmod +x scripts/setup_local_supabase.sh
 The script:
 1. Installs the Supabase CLI if it is missing.
 2. Runs `supabase start` (launching the full Supabase stack via Docker).
-3. Reads the REST URL + anon key from `supabase status --json` and updates `.env`.
+3. Reads the REST URL + key from `supabase status --json` and updates `.env`.
+   - It prefers `service_role` key (recommended for backend write/ingestion features).
+   - If only anon key is discoverable, it uses anon and prints a warning.
+
+Typical local Supabase containers include:
+- Postgres (`supabase_db_*`)
+- API gateway (`supabase_kong_*`)
+- Auth (`supabase_auth_*`)
+- REST (`supabase_rest_*`)
+- Realtime (`supabase_realtime_*`)
+- Storage (`supabase_storage_*`)
+- Studio (`supabase_studio_*`)
+- PG Meta (`supabase_pg_meta_*`)
+- Analytics (`supabase_analytics_*`)
+- Inbucket (`supabase_inbucket_*`)
+- Vector (`supabase_vector_*`)
+
+Inspect runtime services with:
+
+```bash
+supabase status
+docker ps --format '{{.Names}}\t{{.Image}}' | rg -i 'supabase|study-agents'
+```
 
 Supabase Studio (GUI) and APIs are exposed on `http://127.0.0.1:5432x` ports (the CLI output lists the exact URLs). Tunnel or proxy those ports if you need remote access.
 
@@ -301,7 +325,7 @@ The script will:
 4. Stop/remove any stale project containers that might be holding ports 8000/8100.
 5. Run `docker compose up -d --build`.
 
-When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show `cag-service` and `rag-service` running.
+When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show the app services (`cag-service`, `rag-service`, `scenario-service`, `copilot-service`, `utility-service`) running.
 If Supabase’s official installer is unreachable, the script automatically falls back to downloading the latest CLI binary from GitHub releases as a fallback.
 
 ## Rebuild the Bootstrap Bundle

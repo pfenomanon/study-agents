@@ -35,12 +35,15 @@ python scripts/build_release_bundles.py
    ```bash
    cp .env.example .env
    ```
-2. Set required values:
+2. Choose Supabase mode:
+   - Cloud Supabase: set hosted `SUPABASE_URL` + service-role `SUPABASE_KEY`.
+   - Local Supabase Docker: run `./scripts/setup_local_supabase.sh` to start local Supabase stack and auto-populate `.env`.
+3. Set required values:
    - `OPENAI_API_KEY` (and `OPENAI_EMBED_MODEL` if you want a different model)
    - `SUPABASE_URL`, `SUPABASE_KEY`
    - `OLLAMA_HOST`/`OLLAMA_API_KEY` if using Ollama cloud
    - Optional toggles: `USE_HYBRID_RETRIEVAL=true`, `RAG_USE_DOCLING=true`
-3. Apply the schema to your Supabase project:
+4. Apply the schema to your Supabase target (cloud or local):
    ```bash
    psql "$SUPABASE_URL" < supabase_schema.sql
    ```
@@ -55,10 +58,12 @@ Services:
 - `rag-service` (port 8100): RAG builder API
 - `utility-service`: base image for running CLI agents inside the container
 - `copilot-service` (port 9010): PydanticAI backend for CopilotKit
-- `copilot-frontend` (port 3000): Next.js + CopilotKit UI (set `NEXT_PUBLIC_COPILOT_API`/`COPILOT_BACKEND_URL` if custom)
+- `scenario-service` (port 9000): Scenario API
 - Vision capture: UI card and `/copilot/capture` endpoint are available; they need a display. For headless use, post images to `/cag-ocr-answer` or run capture on a GUI host.
 
 Mounts: `.env`, `prompts/`, `data/`, `knowledge_graph/`, `research_output/` are bind-mounted so host edits are reflected live.
+
+If you choose local Supabase mode, Supabase CLI runs an additional Docker stack (`supabase_db`, `supabase_rest`, `supabase_auth`, `supabase_storage`, `supabase_realtime`, `supabase_studio`, etc.) alongside these app services.
 
 ## Run Natively (venv)
 ```bash
@@ -94,3 +99,11 @@ curl -X POST http://localhost:8000/cag-answer \
 Logs:
 - Docker: `docker compose logs -f cag-service`
 - Native: check `scenario_api.log`, `frontend_dev.log`, and per-agent stderr/stdout.
+
+## Security Notes
+- Prefer service-role key for backend runtime (`SUPABASE_KEY`); anon keys may limit write/ingestion paths.
+- If running local Supabase, avoid exposing Supabase ports publicly; keep them localhost-bound unless proxied intentionally.
+- Set `API_TOKEN` and `COPILOT_API_KEY` for production-facing deployments.
+- `scenario-service` (`/scenarios*`) is not token-guarded by default in this split package; keep it private or enforce auth at the reverse proxy.
+- Default compose ports are HTTP; for remote access terminate TLS (HTTPS) at a reverse proxy or load balancer.
+- Clients can send auth as `X-API-Key` or `Authorization: Bearer <token>`.

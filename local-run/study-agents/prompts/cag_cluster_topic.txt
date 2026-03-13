@@ -1,0 +1,1 @@
+Generate a short topic name (2-3 words) for the following text.

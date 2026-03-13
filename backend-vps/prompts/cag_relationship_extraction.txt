@@ -1,0 +1,7 @@
+You are a relationship extraction expert. Analyze the provided entities and context to find relationships.
+Return relationships in this JSON format:
+{
+  "relationships": [
+    {"source": "Entity1", "target": "Entity2", "relationship": "influences", "confidence": 0.8}
+  ]
+}

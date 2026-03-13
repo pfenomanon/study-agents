@@ -1,0 +1,106 @@
+services:
+  cag-service:
+    build:
+      context: .
+      dockerfile: docker/cag.Dockerfile
+    image: study-agents-cag
+    env_file: .env
+    environment:
+      HOME: /app
+    ports:
+      - "8000:8000"
+    networks:
+      - backend
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh python -m study_agents.api_server"]
+    volumes:
+      - ./src:/app/src
+      - ./prompts:/app/prompts
+      - ./data:/app/data
+      - ./knowledge_graph:/app/knowledge_graph
+      - env-vol:/env
+
+  rag-service:
+    build:
+      context: .
+      dockerfile: docker/rag.Dockerfile
+    image: study-agents-rag
+    env_file: .env
+    volumes:
+      - ./prompts:/app/prompts
+      - ./data:/app/data
+      - env-vol:/env
+    ports:
+      - "8100:8100"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  utility-service:
+    build:
+      context: .
+      dockerfile: docker/base.Dockerfile
+    image: study-agents-utility
+    env_file: .env
+    volumes:
+      - ./prompts:/app/prompts
+      - ./data:/app/data
+      - ./research_output:/app/research_output
+      - env-vol:/env
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh tail -f /dev/null"]
+    networks:
+      - backend
+    restart: unless-stopped
+
+  copilot-service:
+    build:
+      context: .
+      dockerfile: docker/copilot.Dockerfile
+    image: study-agents-copilot
+    env_file: .env
+    volumes:
+      - ./research_output:/app/research_output
+      - ./data:/app/data
+      - env-vol:/env
+    ports:
+      - "9010:9010"
+    networks:
+      - backend
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh uvicorn study_agents.copilot_service:app --host 0.0.0.0 --port 9010"]
+    restart: unless-stopped
+
+  scenario-service:
+    build:
+      context: .
+      dockerfile: docker/base.Dockerfile
+    image: study-agents-scenario
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - env-vol:/env
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh study-agents-scenario-api"]
+    ports:
+      - "9000:9000"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  vault:
+    image: hashicorp/vault:1.16.2
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:-root}
+      VAULT_ADDR: http://0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    networks:
+      - backend
+    cap_add:
+      - IPC_LOCK
+    command: "server -dev"
+
+volumes:
+  env-vol:
+
+networks:
+  backend:
+    driver: bridge

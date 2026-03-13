@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
+
+# Runtime/output data (host bind mounts)
+backend-vps/data/
+backend-vps/knowledge_graph/
+backend-vps/research_output/
+backend-vps/temp_images/
+local-run/study-agents/data/
+local-run/study-agents/knowledge_graph/
+local-run/study-agents/research_output/

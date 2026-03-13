@@ -1,0 +1,782 @@
+"""
+Context-Aware Grouping (CAG) Agent
+
+Enhances RAG with semantic clustering, knowledge graphs, and context-aware retrieval.
+Uses Graphiti MCP for knowledge graph operations and integrates with Supabase.
+"""
+
+import argparse
+import json
+import os
+import sys
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
+
+import numpy as np
+from openai import OpenAI
+from supabase import create_client
+import fitz  # PyMuPDF for PDF reading
+
+from .config import (
+    OPENAI_API_KEY,
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    SUPABASE_DOCS_TABLE,
+    SUPABASE_NODES_TABLE,
+    SUPABASE_EDGES_TABLE,
+    OPENAI_EMBED_MODEL
+)
+from .rag_builder_core import chunk_text, split_into_paragraphs
+
+
+@dataclass
+class KnowledgeNode:
+    """Represents a node in the knowledge graph."""
+    id: str
+    type: str  # entity, concept, topic, etc.
+    label: str
+    description: str
+    embedding: Optional[List[float]] = None
+    metadata: Optional[Dict] = None
+    created_at: str = None
+
+
+@dataclass
+class KnowledgeEdge:
+    """Represents a relationship between nodes."""
+    id: str
+    source_id: str
+    target_id: str
+    relationship: str  # influences, part_of, related_to, etc.
+    weight: float = 1.0
+    metadata: Optional[Dict] = None
+    created_at: str = None
+
+
+@dataclass
+class SemanticCluster:
+    """Represents a cluster of semantically related content."""
+    id: str
+    centroid: List[float]
+    chunks: List[str]
+    topic: str
+    confidence: float
+
+
+class CAGAgent:
+    """
+    Context-Aware Grouping Agent
+    
+    Enhances RAG with semantic clustering, knowledge graphs, and context-aware retrieval.
+    """
+    
+    def __init__(self):
+        self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        self.embedding_model = OPENAI_EMBED_MODEL
+        
+    def extract_entities(self, text: str) -> List[Dict]:
+        """
+        Extract entities from text using reasoning model.
+        """
+        try:
+            system_prompt = """You are an entity extraction expert. Extract key entities from the text.
+            Return entities in this JSON format:
+            {
+              "entities": [
+                {"name": "Entity Name", "type": "person/concept/place", "description": "Brief description"}
+              ]
+            }"""
+            
+            user_prompt = f"Extract entities from:\n\n{text[:1000]}"
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # Try to extract JSON from response
+            try:
+                entities_data = json.loads(result)
+                return entities_data.get("entities", [])
+            except json.JSONDecodeError:
+                # Fallback: parse entities manually if JSON fails
+                entities = []
+                lines = result.split('\n')
+                for line in lines:
+                    if '-' in line or '•' in line:
+                        # Simple entity extraction
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            entities.append({
+                                "name": parts[0].strip(' -•'),
+                                "type": "entity",
+                                "description": parts[1].strip()
+                            })
+                return entities
+            
+        except Exception as e:
+            print(f"⚠️ Entity extraction failed: {e}")
+            return []
+    
+    def build_relationships(self, entities: List[Dict], context: str) -> List[Dict]:
+        """
+        Build relationships between entities using reasoning model.
+        """
+        try:
+            system_prompt = """You are a relationship extraction expert. Analyze entities and context to find relationships.
+            Return relationships in this JSON format:
+            {
+              "relationships": [
+                {"source": "Entity1", "target": "Entity2", "relationship": "influences", "confidence": 0.8}
+              ]
+            }"""
+            
+            entities_text = "\n".join([f"- {e['name']} ({e['type']})" for e in entities])
+            user_prompt = f"""Entities:\n{entities_text}\n\nContext:\n{context[:1000]}\n\nFind relationships between these entities."""
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # Try to extract JSON from response
+            try:
+                relationships_data = json.loads(result)
+                return relationships_data.get("relationships", [])
+            except json.JSONDecodeError:
+                # Fallback: parse relationships manually if JSON fails
+                relationships = []
+                lines = result.split('\n')
+                for line in lines:
+                    if '→' in line or '->' in line or 'relates to' in line.lower():
+                        # Simple relationship extraction
+                        parts = line.split('→' if '→' in line else '->' if '->' in line else 'relates to')
+                        if len(parts) > 1:
+                            relationships.append({
+                                "source": parts[0].strip(' -•'),
+                                "target": parts[1].strip(' -•'),
+                                "relationship": "related_to",
+                                "confidence": 0.7
+                            })
+                return relationships
+            
+        except Exception as e:
+            print(f"⚠️ Relationship building failed: {e}")
+            return []
+    
+    def create_knowledge_nodes(self, entities: List[Dict]) -> List[KnowledgeNode]:
+        """
+        Create knowledge nodes from entities.
+        """
+        nodes = []
+        timestamp = datetime.now().isoformat()
+        
+        for entity in entities:
+            # Generate embedding for entity
+            try:
+                embedding = self.openai_client.embeddings.create(
+                    model=self.embedding_model,
+                    input=f"{entity['name']} {entity['description']}"
+                ).data[0].embedding
+            except:
+                embedding = None
+            
+            node = KnowledgeNode(
+                id=str(uuid.uuid4()),
+                type=entity.get('type', 'entity'),
+                label=entity['name'],
+                description=entity.get('description', ''),
+                embedding=embedding,
+                metadata={'source': 'cag_extraction'},
+                created_at=timestamp
+            )
+            nodes.append(node)
+        
+        return nodes
+    
+    def create_knowledge_edges(self, relationships: List[Dict], nodes: List[KnowledgeNode]) -> List[KnowledgeEdge]:
+        """
+        Create knowledge edges from relationships.
+        """
+        edges = []
+        timestamp = datetime.now().isoformat()
+        
+        # Create node lookup
+        node_lookup = {node.label: node for node in nodes}
+        
+        for rel in relationships:
+            source_node = node_lookup.get(rel['source'])
+            target_node = node_lookup.get(rel['target'])
+            
+            if source_node and target_node:
+                edge = KnowledgeEdge(
+                    id=str(uuid.uuid4()),
+                    source_id=source_node.id,
+                    target_id=target_node.id,
+                    relationship=rel.get('relationship', 'related_to'),
+                    weight=rel.get('confidence', 1.0),
+                    metadata={'source': 'cag_extraction'},
+                    created_at=timestamp
+                )
+                edges.append(edge)
+        
+        return edges
+    
+    def store_knowledge_graph(self, nodes: List[KnowledgeNode], edges: List[KnowledgeEdge]) -> Tuple[int, int]:
+        """
+        Store knowledge graph in Supabase.
+        """
+        nodes_stored = 0
+        edges_stored = 0
+        
+        # Store nodes - match actual schema: id, type, title, attrs
+        for node in nodes:
+            try:
+                self.supabase.table(SUPABASE_NODES_TABLE).upsert({
+                    'id': node.id,
+                    'type': node.type,
+                    'title': node.label,
+                    'attrs': {
+                        'description': node.description,
+                        'embedding': node.embedding,
+                        'source': 'cag_extraction',
+                        'created_at': node.created_at
+                    }
+                }).execute()
+                nodes_stored += 1
+            except Exception as e:
+                print(f"⚠️ Failed to store node {node.id}: {e}")
+        
+        # Store edges - match actual schema: id, src, rel, dst, attrs
+        for edge in edges:
+            try:
+                self.supabase.table(SUPABASE_EDGES_TABLE).upsert({
+                    'id': edge.id,
+                    'src': edge.source_id,
+                    'rel': edge.relationship,
+                    'dst': edge.target_id,
+                    'attrs': {
+                        'weight': edge.weight,
+                        'source': 'cag_extraction',
+                        'created_at': edge.created_at
+                    }
+                }).execute()
+                edges_stored += 1
+            except Exception as e:
+                print(f"⚠️ Failed to store edge {edge.id}: {e}")
+        
+        return nodes_stored, edges_stored
+    
+    def semantic_cluster_chunks(self, chunks: List[str], n_clusters: int = 5) -> List[SemanticCluster]:
+        """
+        Cluster chunks semantically using embeddings.
+        """
+        if len(chunks) < n_clusters:
+            n_clusters = len(chunks)
+        
+        try:
+            # Generate embeddings for all chunks
+            embeddings = []
+            for chunk in chunks:
+                embedding = self.openai_client.embeddings.create(
+                    model=self.embedding_model,
+                    input=chunk
+                ).data[0].embedding
+                embeddings.append(embedding)
+            
+            # Simple clustering using centroid-based approach
+            # For production, use proper clustering algorithms
+            clusters = []
+            chunk_per_cluster = len(chunks) // n_clusters
+            
+            for i in range(n_clusters):
+                start_idx = i * chunk_per_cluster
+                end_idx = start_idx + chunk_per_cluster if i < n_clusters - 1 else len(chunks)
+                
+                cluster_chunks = chunks[start_idx:end_idx]
+                cluster_embeddings = embeddings[start_idx:end_idx]
+                
+                # Calculate centroid
+                centroid = np.mean(cluster_embeddings, axis=0).tolist()
+                
+                # Generate topic for cluster
+                cluster_text = " ".join(cluster_chunks[:3])  # Use first 3 chunks for topic
+                topic = self._generate_cluster_topic(cluster_text)
+                
+                cluster = SemanticCluster(
+                    id=str(uuid.uuid4()),
+                    centroid=centroid,
+                    chunks=cluster_chunks,
+                    topic=topic,
+                    confidence=0.8  # Placeholder confidence
+                )
+                clusters.append(cluster)
+            
+            return clusters
+            
+        except Exception as e:
+            print(f"⚠️ Semantic clustering failed: {e}")
+            return []
+    
+    def _generate_cluster_topic(self, text: str) -> str:
+        """
+        Generate a topic name for a cluster using reasoning model.
+        """
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Generate a short topic name (2-3 words) for the following text."},
+                    {"role": "user", "content": text[:500]}
+                ],
+                temperature=0.3
+            )
+            return response.choices[0].message.content.strip()
+        except:
+            return "Unknown Topic"
+    
+    def traverse_knowledge_graph(self, query: str, max_depth: int = 2) -> List[str]:
+        """
+        Traverse knowledge graph to find related concepts.
+        """
+        try:
+            # Find relevant nodes for query
+            query_embedding = self.openai_client.embeddings.create(
+                model=self.embedding_model,
+                input=query
+            ).data[0].embedding
+            
+            # Search for similar nodes in documents table (vector search)
+            results = self.supabase.rpc('match_documents', {
+                'query_embedding': query_embedding,
+                'match_threshold': 0.3,
+                'match_count': 10
+            }).execute()
+            
+            if not results.data:
+                return []
+            
+            # Get related nodes through edges using correct schema
+            related_content = []
+            visited_nodes = set()
+            
+            # First, check if we have any nodes in kg_nodes that match our query
+            try:
+                # Try to find nodes by title similarity
+                node_results = self.supabase.table(SUPABASE_NODES_TABLE).select('*').execute()
+                if node_results.data:
+                    # Simple text matching for now
+                    for node in node_results.data[:5]:
+                        if any(word.lower() in node['title'].lower() for word in query.split() if len(word) > 2):
+                            node_id = node['id']
+                            if node_id not in visited_nodes:
+                                # Traverse edges using correct schema (src, rel, dst)
+                                edges = self.supabase.table(SUPABASE_EDGES_TABLE).select('*').or_(
+                                    f"(src=eq.{node_id},dst=eq.{node_id})"
+                                ).execute()
+                                
+                                for edge in edges.data:
+                                    # Get connected node
+                                    connected_node_id = edge['dst'] if edge['src'] == node_id else edge['src']
+                                    if connected_node_id not in visited_nodes:
+                                        connected_node = self.supabase.table(SUPABASE_NODES_TABLE).select('*').eq(
+                                            'id', connected_node_id
+                                        ).execute()
+                                        
+                                        if connected_node.data:
+                                            node_data = connected_node.data[0]
+                                            description = node_data.get('attrs', {}).get('description', '')
+                                            related_content.append(f"{node_data['title']}: {description}")
+                                            visited_nodes.add(connected_node_id)
+            except Exception as e:
+                print(f"⚠️ Graph traversal error: {e}")
+            
+            return related_content
+            
+        except Exception as e:
+            print(f"⚠️ Graph traversal failed: {e}")
+            return []
+    
+    def enhanced_retrieve_context(self, query: str, top_k: int = 5) -> str:
+        """
+        Enhanced context retrieval combining vector search and knowledge graph traversal.
+        """
+        # Vector search for similar chunks
+        try:
+            query_embedding = self.openai_client.embeddings.create(
+                model=self.embedding_model,
+                input=query
+            ).data[0].embedding
+            
+            vector_results = self.supabase.rpc('match_documents', {
+                'query_embedding': query_embedding,
+                'match_threshold': 0.2,
+                'match_count': top_k
+            }).execute()
+            
+            vector_context = [r['content'] for r in vector_results.data] if vector_results.data else []
+        except:
+            vector_context = []
+        
+        # Knowledge graph traversal for related concepts
+        graph_context = self.traverse_knowledge_graph(query)
+        
+        # Combine contexts
+        all_context = vector_context + graph_context
+        
+        if not all_context:
+            return ""
+        
+        # Limit total context length
+        combined = "\n\n---\n\n".join(all_context)
+        return combined[:4000]  # Limit to 4000 chars
+    
+    def process_document_with_cag(self, text: str, source: str = "cag_agent") -> Dict:
+        """
+        Process document with full CAG pipeline.
+        """
+        print("🔄 Processing with CAG pipeline...")
+        
+        # Step 1: Extract entities
+        entities = self.extract_entities(text)
+        print(f"🏷️ Extracted {len(entities)} entities")
+        
+        # Step 2: Build relationships
+        relationships = self.build_relationships(entities, text)
+        print(f"🔗 Built {len(relationships)} relationships")
+        
+        # Step 3: Create knowledge graph
+        nodes = self.create_knowledge_nodes(entities)
+        edges = self.create_knowledge_edges(relationships, nodes)
+        
+        # Step 4: Store knowledge graph
+        nodes_stored, edges_stored = self.store_knowledge_graph(nodes, edges)
+        print(f"💾 Stored {nodes_stored} nodes and {edges_stored} edges")
+        
+        # Step 5: Semantic clustering
+        paragraphs = split_into_paragraphs(text)
+        chunks = chunk_text(paragraphs, chunk_size=1200, overlap=150)
+        clusters = self.semantic_cluster_chunks(chunks)
+        print(f"📊 Created {len(clusters)} semantic clusters")
+        
+        return {
+            'entities': len(entities),
+            'relationships': len(relationships),
+            'nodes_stored': nodes_stored,
+    
+except Exception as e:
+    print(f"[!] Semantic clustering failed: {e}")
+    return []
+
+def _generate_cluster_topic(self, text: str) -> str:
+    """
+    Generate a topic name for a cluster using reasoning model.
+    """
+    try:
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Generate a short topic name (2-3 words) for the following text."},
+                {"role": "user", "content": text[:500]}
+            ],
+            temperature=0.3
+        )
+        return response.choices[0].message.content.strip()
+    except:
+        return "Unknown Topic"
+
+def traverse_knowledge_graph(self, query: str, max_depth: int = 2) -> List[str]:
+    """
+    Traverse knowledge graph to find related concepts.
+    """
+    try:
+        # Find relevant nodes for query
+        query_embedding = self.openai_client.embeddings.create(
+            model=self.embedding_model,
+            input=query
+        ).data[0].embedding
+        
+        # Search for similar nodes in documents table (vector search)
+        results = self.supabase.rpc('match_documents', {
+            'query_embedding': query_embedding,
+            'match_threshold': 0.3,
+            'match_count': 10
+        }).execute()
+        
+        if not results.data:
+            return []
+        
+        # Get related nodes through edges using correct schema
+        related_content = []
+        visited_nodes = set()
+        
+        # First, check if we have any nodes in kg_nodes that match our query
+        try:
+            # Try to find nodes by title similarity
+            node_results = self.supabase.table(SUPABASE_NODES_TABLE).select('*').execute()
+            if node_results.data:
+                # Simple text matching for now
+                for node in node_results.data[:5]:
+                    if any(word.lower() in node['title'].lower() for word in query.split() if len(word) > 2):
+                        node_id = node['id']
+                        if node_id not in visited_nodes:
+                            # Traverse edges using correct schema (src, rel, dst)
+                            edges = self.supabase.table(SUPABASE_EDGES_TABLE).select('*').or_(
+                                f"(src=eq.{node_id},dst=eq.{node_id})"
+                            ).execute()
+                            
+                            for edge in edges.data:
+                                # Get connected node
+                                connected_node_id = edge['dst'] if edge['src'] == node_id else edge['src']
+                                if connected_node_id not in visited_nodes:
+                                    connected_node = self.supabase.table(SUPABASE_NODES_TABLE).select('*').eq(
+                                        'id', connected_node_id
+                                    ).execute()
+                                    
+                                    if connected_node.data:
+                                        node_data = connected_node.data[0]
+                                        description = node_data.get('attrs', {}).get('description', '')
+                                        related_content.append(f"{node_data['title']}: {description}")
+                                        visited_nodes.add(connected_node_id)
+        except Exception as e:
+            print(f"[!] Graph traversal error: {e}")
+        
+        return related_content
+        
+    except Exception as e:
+        print(f"[!] Graph traversal failed: {e}")
+        return []
+
+def enhanced_retrieve_context(self, query: str, top_k: int = 5) -> str:
+    """
+    Enhanced context retrieval combining vector search and knowledge graph traversal.
+    """
+    # Vector search for similar chunks
+    try:
+        query_embedding = self.openai_client.embeddings.create(
+            model=self.embedding_model,
+            input=query
+        ).data[0].embedding
+        
+        vector_results = self.supabase.rpc('match_documents', {
+            'query_embedding': query_embedding,
+            'match_threshold': 0.2,
+            'match_count': top_k
+        }).execute()
+        
+        vector_context = [r['content'] for r in vector_results.data] if vector_results.data else []
+    except:
+        vector_context = []
+    
+    # Knowledge graph traversal for related concepts
+    graph_context = self.traverse_knowledge_graph(query)
+    
+    # Combine contexts
+    all_context = vector_context + graph_context
+    
+    if not all_context:
+        return ""
+    
+    # Limit total context length
+    combined = "\n\n---\n\n".join(all_context)
+    return combined[:4000]  # Limit to 4000 chars
+
+def process_document_with_cag(self, text: str, source: str = "cag_agent") -> Dict:
+    """
+    Process document with full CAG pipeline.
+    """
+    print("[*] Processing with CAG pipeline...")
+    
+    # Step 1: Extract entities
+    entities = self.extract_entities(text)
+    print(f"[+] Extracted {len(entities)} entities")
+    
+    # Step 2: Build relationships
+    relationships = self.build_relationships(entities, text)
+    print(f"[+] Built {len(relationships)} relationships")
+    
+    # Step 3: Create knowledge graph
+    nodes = self.create_knowledge_nodes(entities)
+    edges = self.create_knowledge_edges(relationships, nodes)
+    
+    # Step 4: Store knowledge graph
+    nodes_stored, edges_stored = self.store_knowledge_graph(nodes, edges)
+    print(f"[+] Stored {nodes_stored} nodes and {edges_stored} edges")
+    
+    # Step 5: Semantic clustering
+    paragraphs = split_into_paragraphs(text)
+    chunks = chunk_text(paragraphs, chunk_size=1200, overlap=150)
+    clusters = self.semantic_cluster_chunks(chunks)
+    print(f"[+] Created {len(clusters)} semantic clusters")
+    
+    return {
+        'entities': len(entities),
+        'relationships': len(relationships),
+        'nodes_stored': nodes_stored,
+        'edges_stored': edges_stored,
+        'clusters': len(clusters)
+    }
+
+def answer_with_enhanced_cag(self, question: str) -> Tuple[str, str]:
+    """
+    Answer question using enhanced CAG with knowledge graph traversal.
+    """
+    print("[*] Enhanced CAG processing...")
+    
+    # Step 1: Enhanced context retrieval
+    context = self.enhanced_retrieve_context(question)
+    print(f"[+] Retrieved {len(context)} chars of enhanced context")
+    
+    # Step 2: Generate answer
+    answer = self._generate_answer_with_context(question, context)
+    
+    return context, answer
+
+def _generate_answer_with_context(self, question: str, context: str) -> str:
+    """
+    Generate answer using enhanced context.
+    """
+    try:
+        system_prompt = """You are a precise, evidence-based assistant with access to a knowledge graph.
+            Use the provided context which includes both document content and related concepts.
+            For multiple choice questions, select the most appropriate answer (A, B, C, or D)."""
+        
+        user_prompt = f"""Enhanced Context (includes related concepts):
+{context[:4000]}
+
+Question: {question}
+
+Instructions:
+- Use the enhanced context to find the answer
+- Consider the related concepts and relationships
+- For multiple choice, select the most logical option
+
+Answer:"""
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.2
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            print(f"⚠️ Enhanced answer generation failed: {e}")
+            return f"Error: Unable to generate answer. ({e})"
+
+
+def extract_text_from_file(file_path: str) -> str:
+    """
+    Extract text from various file formats (PDF, TXT, etc.).
+    """
+    if file_path.lower().endswith('.pdf'):
+        try:
+            doc = fitz.open(file_path)
+            text = ""
+            for page in doc:
+                text += page.get_text()
+            doc.close()
+            return text
+        except Exception as e:
+            raise ValueError(f"Failed to extract text from PDF: {e}")
+    else:
+        # Assume text file
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            # Try with different encoding
+            with open(file_path, 'r', encoding='latin-1') as f:
+                return f.read()
+
+
+def main():
+    """Main entry point for CAG Agent."""
+    parser = argparse.ArgumentParser(description="Context-Aware Grouping (CAG) Agent")
+    parser.add_argument(
+        "text_file",
+        nargs="?",
+        help="Text file to process with CAG"
+    )
+    parser.add_argument(
+        "--question",
+        "-q",
+        help="Question to answer using enhanced CAG"
+    )
+    parser.add_argument(
+        "--process",
+        "-p",
+        action="store_true",
+        help="Process document with full CAG pipeline"
+    )
+    parser.add_argument(
+        "--answer",
+        "-a",
+        action="store_true",
+        help="Answer question using enhanced CAG"
+    )
+    
+    args = parser.parse_args()
+    
+    cag = CAGAgent()
+    
+    if args.process and args.text_file:
+        # Process document with CAG
+        print("🔄 Processing with CAG pipeline...")
+        
+        try:
+            # Extract text from file (supports PDF and text files)
+            text = extract_text_from_file(args.text_file)
+            print(f"📄 Extracted {len(text)} characters from {os.path.basename(args.text_file)}")
+            
+            result = cag.process_document_with_cag(text)
+            print(f"\n✅ CAG Processing Complete:")
+            print(f"   Entities: {result['entities']}")
+            print(f"   Relationships: {result['relationships']}")
+            print(f"   Nodes Stored: {result['nodes_stored']}")
+            print(f"   Edges Stored: {result['edges_stored']}")
+            print(f"   Clusters: {result['clusters']}")
+            
+        except FileNotFoundError:
+            print(f"❌ File not found: {args.text_file}")
+        except Exception as e:
+            print(f"❌ Processing failed: {e}")
+    
+    elif args.answer:
+        # Answer question with enhanced CAG
+        if args.question:
+            question = args.question
+        else:
+            question = input("Enter your question: ")
+        context, answer = cag.answer_with_enhanced_cag(question)
+        print(f"\n📚 Enhanced Context:\n{context[:1000]}{'...' if len(context) > 1000 else ''}\n")
+        print(f"💡 Answer:\n{answer}\n")
+    
+    else:
+        print("🤖 CAG Agent - Context-Aware Grouping with Knowledge Graphs")
+        print("Use --process <file> to process documents")
+        print("Use --answer <question> to answer questions")
+        print("Example: python -m study_agents.cag_agent --process doc.txt --process")
+
+
+if __name__ == "__main__":
+    main()

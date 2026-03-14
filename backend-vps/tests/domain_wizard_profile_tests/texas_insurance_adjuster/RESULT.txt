@@ -1,0 +1,5 @@
+profile=texas_insurance_adjuster
+deterministic_exit_code=0
+logs_dir=/home/study-agents-github/backend-vps/tests/domain_wizard_profile_tests/texas_insurance_adjuster/logs
+ai_openai_exit_code=0
+restored=true

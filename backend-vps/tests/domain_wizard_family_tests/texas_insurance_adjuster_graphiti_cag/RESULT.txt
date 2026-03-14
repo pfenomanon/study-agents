@@ -1,0 +1,5 @@
+profile=texas_insurance_adjuster
+targets=cag_answer
+deterministic_exit_code=0
+ai_openai_gpt_5_2_exit_code=0
+restored=true

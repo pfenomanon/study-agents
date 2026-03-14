@@ -1,0 +1,86 @@
+```json
+{
+  "entities": [
+    {
+      "name": "Texas Windstorm Insurance Association (TWIA)",
+      "type": "RegulatoryBody",
+      "description": "TWIA oversees windstorm insurance eligibility and coverage in Texas.",
+      "keywords": ["TWIA", "Texas Windstorm Insurance Association"],
+      "source_excerpt": "Texas Windstorm Insurance Association (TWIA) eligibility requires the dwelling to be located in a designated catastrophe area and be a primary residence.",
+      "priority": "High"
+    },
+    {
+      "name": "Homeowners Policy (HO-3)",
+      "type": "CoverageForm",
+      "description": "HO-3 is a standard homeowners insurance policy covering various risks.",
+      "keywords": ["Homeowners Policy", "HO-3"],
+      "source_excerpt": "Homeowners Policy (HO-3) Coverage A - Dwelling includes direct physical loss unless excluded.",
+      "priority": "High"
+    },
+    {
+      "name": "Coverage A - Dwelling",
+      "type": "CoverageForm",
+      "description": "Coverage A provides protection for the dwelling against direct physical loss.",
+      "keywords": ["Coverage A", "Dwelling"],
+      "source_excerpt": "Homeowners Policy (HO-3) Coverage A - Dwelling includes direct physical loss unless excluded.",
+      "priority": "High"
+    },
+    {
+      "name": "Windstorm exclusion",
+      "type": "Term",
+      "description": "Exclusion that limits coverage for windstorm damage unless specific endorsements are in place.",
+      "keywords": ["Windstorm exclusion"],
+      "source_excerpt": "Windstorm exclusion applies unless TWIA endorsement is active.",
+      "priority": "Medium"
+    },
+    {
+      "name": "Claim notice",
+      "type": "Obligation",
+      "description": "Insured must notify the insurer of a claim within a specified timeframe.",
+      "keywords": ["claim notice", "24-hour claim notice"],
+      "source_excerpt": "Insured must provide claim notice within 24 hours after discovering major roof damage.",
+      "priority": "High"
+    },
+    {
+      "name": "Texas Department of Insurance",
+      "type": "RegulatoryBody",
+      "description": "State agency regulating insurance practices and ensuring compliance in Texas.",
+      "keywords": ["Texas Department of Insurance", "TDI"],
+      "source_excerpt": "Texas Department of Insurance requires carriers to provide claim acknowledgment timelines and adverse action notices.",
+      "priority": "High"
+    },
+    {
+      "name": "Claim acknowledgment timelines",
+      "type": "Requirement",
+      "description": "Insurers must adhere to timelines for acknowledging claims as mandated by TDI.",
+      "keywords": ["claim acknowledgment timelines"],
+      "source_excerpt": "Texas Department of Insurance requires carriers to provide claim acknowledgment timelines and adverse action notices.",
+      "priority": "Medium"
+    },
+    {
+      "name": "Adverse action notices",
+      "type": "Requirement",
+      "description": "Notices that inform insureds of adverse decisions regarding their claims.",
+      "keywords": ["adverse action notices"],
+      "source_excerpt": "Texas Department of Insurance requires carriers to provide claim acknowledgment timelines and adverse action notices.",
+      "priority": "Medium"
+    },
+    {
+      "name": "Deductible for wind/hail",
+      "type": "Term",
+      "description": "The deductible amount for wind and hail claims is set at a percentage of Coverage A limit.",
+      "keywords": ["deductible", "wind/hail", "2% of Coverage A limit"],
+      "source_excerpt": "Deductible for wind/hail is 2% of Coverage A limit.",
+      "priority": "Medium"
+    },
+    {
+      "name": "Eligibility: primary residence",
+      "type": "Requirement",
+      "description": "Eligibility for TWIA coverage requires the dwelling to be a primary residence.",
+      "keywords": ["Eligibility", "primary residence"],
+      "source_excerpt": "Texas Windstorm Insurance Association (TWIA) eligibility requires the dwelling to be located in a designated catastrophe area and be a primary residence.",
+      "priority": "High"
+    }
+  ]
+}
+```

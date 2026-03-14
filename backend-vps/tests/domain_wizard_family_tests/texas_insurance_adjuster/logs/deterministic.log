@@ -1,0 +1,7 @@
+Loaded env files: /home/study-agents/.env
+Generated entity prompt: /home/study-agents-github/backend-vps/prompts/kg_entity_extraction.txt
+Generated edge prompt: /home/study-agents-github/backend-vps/prompts/kg_edge_extraction.txt
+Generated vision prompt: /home/study-agents-github/backend-vps/prompts/vision_reasoning.txt
+Generated cag_answer prompt: /home/study-agents-github/backend-vps/prompts/cag_answer_generation.txt
+Generated scenario_structurer prompt: /home/study-agents-github/backend-vps/prompts/scenario_answer_structuring.txt
+Validation passed.

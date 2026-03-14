@@ -1,0 +1,9 @@
+Loaded env files: /home/study-agents/.env
+AI runtime resolved: platform=ollama model=deepseek-v3.1:671b-cloud ollama_target=cloud resolver=cag_agent
+AI generated entity prompt using ollama/deepseek-v3.1:671b-cloud
+AI generated edge prompt using ollama/deepseek-v3.1:671b-cloud
+AI generated vision prompt using ollama/deepseek-v3.1:671b-cloud
+Generated entity prompt: /home/study-agents-github/backend-vps/prompts/kg_entity_extraction.txt
+Generated edge prompt: /home/study-agents-github/backend-vps/prompts/kg_edge_extraction.txt
+Generated vision prompt: /home/study-agents-github/backend-vps/prompts/vision_reasoning.txt
+Validation passed.

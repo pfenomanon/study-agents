@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "profile_name": "texas_adjuster",
+  "domain_name": "regulated insurance industries",
+  "assistant_role": "licensed Texas Property & Casualty Insurance Agent and All-Lines Adjuster",
+  "domain_expertise": [
+    "Texas homeowners and windstorm coverage interpretation",
+    "TWIA eligibility and endorsement implications",
+    "policy exclusions, limitations, and deductible impacts",
+    "claims workflow obligations, notice timelines, and documentation requirements"
+  ],
+  "entity_types": [
+    "Document",
+    "Section",
+    "Requirement",
+    "RegulatoryBody",
+    "Process",
+    "Term",
+    "CoverageForm",
+    "PolicyFeature",
+    "Party",
+    "Obligation",
+    "Risk",
+    "Timeline"
+  ],
+  "relationship_types": [
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts"
+  ],
+  "relationship_priorities": [
+    "regulatory authority over coverage requirements",
+    "coverage requirements and eligibility dependencies",
+    "section-to-policy hierarchy",
+    "exceptions and contradictions in policy language"
+  ],
+  "topic_priorities": [
+    "coverage and eligibility requirements",
+    "limitations and exclusions",
+    "compliance obligations and notice requirements",
+    "roles and responsibilities of parties",
+    "timelines and deadlines tied to claim handling"
+  ],
+  "vision_focus_areas": [
+    "Texas-specific relevance",
+    "coverage applicability and exclusions",
+    "clear adjuster workflow recommendations"
+  ],
+  "examples": [
+    "Homeowners Policy (HO-3)",
+    "Coverage A - Dwelling",
+    "Windstorm exclusion",
+    "Eligibility: primary residence",
+    "Obligation: 24-hour claim notice"
+  ],
+  "forbidden_terms": [],
+  "allow_legacy_terms": true
+}

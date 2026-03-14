@@ -1,0 +1,62 @@
+```json
+{
+  "relationships": [
+    {
+      "source": "Texas Windstorm Insurance Association",
+      "target": "Homeowners Policy",
+      "type": "requires",
+      "description": "TWIA eligibility requires the dwelling to be a primary residence.",
+      "valid_at": null
+    },
+    {
+      "source": "Texas Windstorm Insurance Association",
+      "target": "Homeowners Policy",
+      "type": "requires",
+      "description": "TWIA eligibility requires the dwelling to be in a designated catastrophe area.",
+      "valid_at": null
+    },
+    {
+      "source": "Homeowners Policy",
+      "target": "Homeowners Policy Coverage A - Dwelling",
+      "type": "defines",
+      "description": "Coverage A includes direct physical loss unless excluded.",
+      "valid_at": null
+    },
+    {
+      "source": "Homeowners Policy",
+      "target": "Windstorm exclusion",
+      "type": "contradicts",
+      "description": "Windstorm exclusion applies unless TWIA endorsement is active.",
+      "valid_at": null
+    },
+    {
+      "source": "Insured",
+      "target": "claim notice",
+      "type": "requires",
+      "description": "Insured must provide claim notice within 24 hours of discovering major roof damage.",
+      "valid_at": null
+    },
+    {
+      "source": "Texas Department of Insurance",
+      "target": "carriers",
+      "type": "governs",
+      "description": "Texas Department of Insurance requires carriers to provide claim acknowledgment timelines.",
+      "valid_at": null
+    },
+    {
+      "source": "Texas Department of Insurance",
+      "target": "carriers",
+      "type": "governs",
+      "description": "Texas Department of Insurance requires carriers to provide adverse action notices.",
+      "valid_at": null
+    },
+    {
+      "source": "Homeowners Policy Coverage A - Dwelling",
+      "target": "deductible for wind/hail",
+      "type": "defines",
+      "description": "Deductible for wind/hail is 2% of Coverage A limit.",
+      "valid_at": null
+    }
+  ]
+}
+```

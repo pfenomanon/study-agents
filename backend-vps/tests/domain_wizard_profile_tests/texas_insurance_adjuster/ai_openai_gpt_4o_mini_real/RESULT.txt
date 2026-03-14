@@ -1,0 +1,5 @@
+profile=texas_insurance_adjuster
+model=gpt-4o-mini
+exit_code=0
+restored=true
+log=/home/study-agents-github/backend-vps/tests/domain_wizard_profile_tests/texas_insurance_adjuster/logs/ai_openai_gpt_4o_mini_real.log

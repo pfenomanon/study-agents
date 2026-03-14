@@ -1,0 +1,58 @@
+{
+  "generated_at": "2026-03-14T02:28:28.364647+00:00",
+  "profile_path": "/home/study-agents-github/backend-vps/domain/profiles/texas_auto_independent_adjuster.json",
+  "used_ai": true,
+  "ai_error": "",
+  "profile_validation_errors": [],
+  "wizard_check_ok": true,
+  "wizard_check_output": "Loaded env files: /home/study-agents/.env\nValidation passed.",
+  "field_evidence": {
+    "domain_expertise": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S10",
+      "S12"
+    ],
+    "entity_types": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S7",
+      "S9",
+      "S10",
+      "S12"
+    ],
+    "relationship_types": [
+      "S3",
+      "S4",
+      "S10",
+      "S12"
+    ],
+    "relationship_priorities": [
+      "S3",
+      "S4",
+      "S10",
+      "S12"
+    ],
+    "topic_priorities": [
+      "S2",
+      "S3",
+      "S4",
+      "S10",
+      "S12"
+    ],
+    "vision_focus_areas": [
+      "S2",
+      "S10"
+    ],
+    "examples": [
+      "S2",
+      "S10",
+      "S12"
+    ]
+  },
+  "field_evidence_errors": []
+}

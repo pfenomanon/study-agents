@@ -112,6 +112,22 @@ From `backend-vps`:
 python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --apply --check
 ```
 
+Optional AI-assisted construction (uses the same reasoning runtime logic as vision/API, then validates and writes only if contract checks pass):
+
+```bash
+python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --use-ai --apply --check
+```
+
+Notes:
+- `--use-ai` is optional; default behavior is deterministic template rendering.
+- The wizard auto-loads available `.env` files (including VPS paths such as `/home/study-agents/.env`) and uses `REASON_PLATFORM`, `REASON_MODEL`, and provider keys from environment values.
+- Use `--env-file /path/to/.env` to force a specific VPS env file.
+- Optional overrides use the same semantics as vision CLI:
+  - `--platform openai|ollama`
+  - `--model <model-name>`
+  - `--ollama-target local|cloud`
+- If AI output fails validation, the wizard falls back to deterministic output unless `--no-ai-fallback` is set.
+
 Example:
 
 ```bash
@@ -343,24 +359,81 @@ Non-interactive apply from an existing profile:
 python3 scripts/domain_wizard.py --profile-name <your-domain> --apply --check
 ```
 
+AI-assisted non-interactive apply:
+
+```bash
+python3 scripts/domain_wizard.py --profile-name <your-domain> --use-ai --apply --check
+```
+
+One-command onboarding (auto-create missing profile):
+
+```bash
+python3 scripts/domain_wizard.py --quickstart --profile-name <your-domain> --use-ai --platform openai --model gpt-5.2 --apply --check
+```
+
+Research-driven onboarding pipeline (web research + profile + prompts):
+
+```bash
+python3 scripts/domain_profile_pipeline.py \
+  --profile-name <your-domain> \
+  --domain "<plain english domain phrase>" \
+  --use-ai --platform openai --model gpt-5.2 \
+  --generate-prompts
+```
+
+Pipeline helper guide:
+- `backend-vps/domain/profile_name_template_helper.md`
+
+Optional domain phrase override:
+
+```bash
+python3 scripts/domain_wizard.py --quickstart --profile-name <your-domain> --domain "aws cloud security operations" --use-ai --platform openai --model gpt-5.2 --apply --check
+```
+
+AI-assisted with explicit runtime overrides:
+
+```bash
+python3 scripts/domain_wizard.py --profile-name <your-domain> --use-ai --platform ollama --model deepseek-v3.1:671b-cloud --ollama-target cloud --apply --check
+```
+
 Optional target-specific generation:
 
 ```bash
 python3 scripts/domain_wizard.py --profile-name <your-domain> --targets entity,edge --apply --check
 ```
 
+Family-aware target set (agent intent):
+- `entity` (KG entity extraction)
+- `edge` (KG edge extraction)
+- `vision` (vision question reasoning)
+- `cag_answer` (final answer synthesis)
+- `scenario_structurer` (scenario JSON structuring)
+
+In AI mode, the wizard is slot-locked: models can refine domain slot values, but cannot rewrite the fixed scaffold/contract for each family.
+The `cag_answer` family includes Graphiti context graph grounding expectations (temporal/provenance-aware evidence usage).
+
 Default profile location:
 - `backend-vps/domain/profiles/generic.json`
+
+Key profile fields driving expertise and behavior:
+- `assistant_role` (persona/expertise title)
+- `domain_expertise` (domain-specific expertise lens injected into reasoning prompt)
+- `vision_focus_areas` (priorities the vision reasoning should emphasize)
+- `entity_types` and `relationship_types` (KG extraction contract for domain semantics)
 
 Template sources:
 - `backend-vps/prompts/templates/kg_entity_extraction.base.txt`
 - `backend-vps/prompts/templates/kg_edge_extraction.base.txt`
 - `backend-vps/prompts/templates/vision_reasoning.base.txt`
+- `backend-vps/prompts/templates/cag_answer_generation.base.txt`
+- `backend-vps/prompts/templates/scenario_answer_structuring.base.txt`
 
 Generated output:
 - `backend-vps/prompts/kg_entity_extraction.txt`
 - `backend-vps/prompts/kg_edge_extraction.txt`
 - `backend-vps/prompts/vision_reasoning.txt`
+- `backend-vps/prompts/cag_answer_generation.txt`
+- `backend-vps/prompts/scenario_answer_structuring.txt`
 
 ### 6.2 Prompt Files You Should Review First
 
@@ -390,8 +463,8 @@ If your target domain is not insurance, start with prompt generation and then al
 
 ### 6.4 Suggested Personalization Order
 
-1. Run domain wizard and generate `kg_entity_extraction.txt`, `kg_edge_extraction.txt`, and `vision_reasoning.txt`.
-2. Update remaining prompts in `backend-vps/prompts/`.
+1. Run domain wizard and generate family prompts (`entity`, `edge`, `vision`, `cag_answer`, `scenario_structurer`).
+2. Update any remaining prompts in `backend-vps/prompts/` not covered by families.
 3. Run smoke tests against `/cag-answer`.
 4. Ingest your own domain data into `data/` and run RAG build.
 5. If using Scenario API, align payload semantics for your app (`scenario_type`, `primary_topic`, checklist/analysis shape).

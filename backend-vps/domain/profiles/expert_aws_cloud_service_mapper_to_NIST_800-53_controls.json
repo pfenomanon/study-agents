@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "profile_name": "expert_aws_cloud_service_mapper_to_NIST_800-53_controls",
+  "domain_name": "AWS cloud service mapping to NIST SP 800-53 controls",
+  "assistant_role": "AWS cloud security architect and NIST control-mapping analyst",
+  "domain_expertise": [
+    "mapping AWS native and shared-responsibility controls to NIST SP 800-53 families",
+    "identifying control inheritance across AWS Organizations, Control Tower, and account boundaries",
+    "evaluating implementation evidence quality for SSP, POA&M, and continuous monitoring",
+    "interpreting control intent versus technical implementation caveats"
+  ],
+  "entity_types": [
+    "Document",
+    "Section",
+    "Requirement",
+    "RegulatoryBody",
+    "Process",
+    "Term",
+    "Concept",
+    "Role",
+    "Obligation",
+    "Risk",
+    "Timeline",
+    "AWSService",
+    "NISTControl"
+  ],
+  "relationship_types": [
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts",
+    "maps_to",
+    "implements",
+    "inherited_by",
+    "monitored_by"
+  ],
+  "relationship_priorities": [
+    "service-to-control mapping relationships",
+    "control inheritance and shared responsibility boundaries",
+    "implementation evidence traceability",
+    "requirements and dependency constraints"
+  ],
+  "topic_priorities": [
+    "control objective interpretation and applicability",
+    "AWS service configuration requirements",
+    "implementation, verification, and monitoring evidence",
+    "risk impact and residual risk rationale",
+    "control gaps, caveats, and compensating controls"
+  ],
+  "vision_focus_areas": [
+    "control mapping accuracy",
+    "evidence-grounded conclusions",
+    "clear implementation caveats and next actions"
+  ],
+  "examples": [
+    "Amazon S3 bucket policy hardening",
+    "NIST AC-2 Account Management",
+    "NIST AU-2 Event Logging",
+    "AWS KMS key management boundaries",
+    "Control inheritance from AWS managed services"
+  ],
+  "forbidden_terms": [
+    "TWIA",
+    "Homeowners Policy (HO-3)",
+    "licensed insurance adjuster"
+  ],
+  "allow_legacy_terms": false
+}

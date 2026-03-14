@@ -1,0 +1,81 @@
+{
+  "model": "gpt-4o-mini",
+  "results": {
+    "manual_baseline": {
+      "entity": {
+        "score_100": 100,
+        "entity_count": 7,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "edge": {
+        "score_100": 100,
+        "relationship_count": 7,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "vision": {
+        "score_100": 78,
+        "notes": []
+      },
+      "overall_avg_100": 92.7
+    },
+    "deterministic": {
+      "entity": {
+        "score_100": 100,
+        "entity_count": 11,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "edge": {
+        "score_100": 100,
+        "relationship_count": 8,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "vision": {
+        "score_100": 78,
+        "notes": []
+      },
+      "overall_avg_100": 92.7
+    },
+    "ai_openai": {
+      "entity": {
+        "score_100": 100,
+        "entity_count": 11,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "edge": {
+        "score_100": 100,
+        "relationship_count": 8,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "vision": {
+        "score_100": 84,
+        "notes": []
+      },
+      "overall_avg_100": 94.7
+    },
+    "ai_ollama": {
+      "entity": {
+        "score_100": 100,
+        "entity_count": 10,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "edge": {
+        "score_100": 100,
+        "relationship_count": 8,
+        "parse_note": "wrapped_json",
+        "notes": []
+      },
+      "vision": {
+        "score_100": 84,
+        "notes": []
+      },
+      "overall_avg_100": 94.7
+    }
+  }
+}

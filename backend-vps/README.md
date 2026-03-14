@@ -95,14 +95,50 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 ## Prompt Customization
 
 - All system prompts live under `prompts/`:
-  - `vision_reasoning.txt`, `cag_entity_extraction.txt`, `cag_relationship_extraction.txt`, `cag_answer_generation.txt`, `cag_cluster_topic.txt`
+  - `vision_reasoning.txt`, `kg_entity_extraction.txt`, `kg_edge_extraction.txt`
+  - `cag_entity_extraction.txt`, `cag_relationship_extraction.txt`, `cag_answer_generation.txt`, `cag_cluster_topic.txt`
+  - `scenario_answer_structuring.txt`
   - `markdown_system_prompt.md` (KB capture), `web_research_system_prompt.md`
 - Edit these files (or set `PROMPTS_DIR=/path/to/prompts`) to tweak agent behavior without touching code. Changes take effect the next time the agent runs.
-- For safe domain-wide personalization, use the profile wizard to regenerate `prompts/kg_entity_extraction.txt`, `prompts/kg_edge_extraction.txt`, and `prompts/vision_reasoning.txt` with schema guardrails:
+- For safe domain-wide personalization, use the profile wizard to regenerate agent-intent prompt families (KG entity/edge, vision reasoning, CAG answer synthesis, scenario structuring) with schema guardrails:
   ```bash
   python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --apply --check
   ```
+  Fastest onboarding for new users (auto-creates profile JSON):
+  ```bash
+  python3 scripts/domain_wizard.py --quickstart --profile-name <your-domain> --use-ai --platform openai --model gpt-5.2 --apply --check
+  ```
+  Optional: pass `--domain "plain english domain phrase"` to override the inferred domain seed.
+  Optional AI-assisted generation:
+  ```bash
+  python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --use-ai --apply --check
+  ```
+  The wizard is template-family aware by agent intent and now supports:
+  - `entity` -> KG entity extraction prompt
+  - `edge` -> KG edge extraction prompt
+  - `vision` -> screenshot reasoning prompt
+  - `cag_answer` -> CAG final answer synthesis prompt (Graphiti context graph aware)
+  - `scenario_structurer` -> scenario answer JSON structuring prompt
+  Use `--targets` to generate only the families you want.
+  AI mode is slot-locked: the model can refine domain slots, but cannot rewrite the fixed scaffold/contracts for each family.
+  The wizard auto-loads available `.env` files (including typical VPS paths) and uses the same runtime routing semantics as vision/API (`REASON_PLATFORM`, `REASON_MODEL`, `OLLAMA_TARGET`, provider keys). Optional overrides: `--platform`, `--model`, `--ollama-target`. Use `--env-file /path/to/.env` to force a specific env source.
+  By default, AI failures fall back to deterministic template output; use `--no-ai-fallback` to fail hard.
+  Profile keys `assistant_role`, `domain_expertise`, and `vision_focus_areas` define the expertise and response behavior injected into `vision_reasoning.txt`.
   Profiles live in `domain/profiles/`; base templates live under `prompts/templates/`.
+  For fully automated onboarding (research -> profile JSON -> prompt generation), use:
+  ```bash
+  python3 scripts/domain_profile_pipeline.py \
+    --profile-name <your-domain> \
+    --domain "<plain english domain phrase>" \
+    --use-ai --platform openai --model gpt-5.2 \
+    --generate-prompts
+  ```
+  This pipeline writes:
+  - `domain/profiles/<profile>.json`
+  - `domain/research/<profile>/dossier.json`
+  - `domain/research/<profile>/validation_report.json`
+  - `domain/research/<profile>/profile_generation_report.md`
+  It is guided by `domain/profile_name_template_helper.md`.
 
 ## Docker Compose
 

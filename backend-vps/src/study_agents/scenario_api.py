@@ -18,6 +18,7 @@ from .kg_pipeline import (
     IngestionConfig,
     KnowledgeIngestionService,
 )
+from .prompt_loader import load_prompt
 from .rag_builder_core import chunk_text, slugify, split_into_paragraphs
 from .settings import get_settings
 
@@ -28,6 +29,32 @@ SCENARIO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 INGEST_CHUNK_SIZE = int(os.getenv("SCENARIO_INGEST_CHUNK_SIZE", "900"))
 INGEST_OVERLAP = int(os.getenv("SCENARIO_INGEST_OVERLAP", "120"))
+
+_DEFAULT_SCENARIO_STRUCTURER_PROMPT = """You convert free-form answers into strict structured JSON for scenario workflows.
+Return JSON only with this exact structure:
+{
+  "summary": "one paragraph summary of guidance that explains why",
+  "recommended_steps": ["ordered list of next actions"],
+  "analysis": {"topic": "brief evidence-grounded analysis"},
+  "documentation_checklist": [
+    {"item": "describe document", "status": "pending|received|not_applicable", "notes": ""}
+  ],
+  "citations": [
+    {"source": "Document or Scenario reference", "details": "optional detail"}
+  ]
+}
+Rules:
+- Do not add markdown fences, commentary, or extra keys.
+- Keep summary concise but explanatory.
+- Keep recommended_steps concrete and prioritized.
+- Keep analysis evidence-grounded.
+- Keep checklist items actionable.
+- Keep citations tied only to provided scenario/evidence references."""
+
+SCENARIO_STRUCTURER_PROMPT = load_prompt(
+    "scenario_answer_structuring.txt",
+    _DEFAULT_SCENARIO_STRUCTURER_PROMPT,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -404,22 +431,6 @@ def structure_scenario_answer(
             )
         return "Explanation: Recommendation based on provided scenario context and evidence."
 
-    schema_prompt = """
-Return JSON with the following structure:
-{
-  "summary": "one paragraph summary of the guidance that clearly explains why",
-  "recommended_steps": ["ordered list of next actions"],
-  "analysis": {"topic": "brief analysis"},
-  "documentation_checklist": [
-    {"item": "describe document", "status": "pending|received|not_applicable", "notes": ""}
-  ],
-  "citations": [
-    {"source": "Document or Scenario reference", "details": "optional detail"}
-  ]
-}
-Do not include any additional keys or commentary.
-"""
-
     user_prompt = (
         f"Scenario ID: {scenario.scenario_id}\n"
         f"Scenario Type: {_scenario_type_value(scenario)}\n"
@@ -437,8 +448,7 @@ Do not include any additional keys or commentary.
             messages=[
                 {
                     "role": "system",
-                    "content": "You convert answers into structured JSON for scenario workflows."
-                               + schema_prompt,
+                    "content": SCENARIO_STRUCTURER_PROMPT,
                 },
                 {"role": "user", "content": user_prompt},
             ],

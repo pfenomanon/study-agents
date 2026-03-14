@@ -3,6 +3,12 @@
   "profile_name": "generic",
   "domain_name": "general subject-matter",
   "assistant_role": "subject-matter-expert assistant",
+  "domain_expertise": [
+    "terminology normalization and concept boundaries",
+    "evidence-grounded reasoning from provided context",
+    "workflow and dependency analysis",
+    "risk, exception, and limitation identification"
+  ],
   "entity_types": [
     "Document",
     "Section",

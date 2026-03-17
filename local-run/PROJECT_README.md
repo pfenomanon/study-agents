@@ -83,6 +83,9 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `--max-seconds` stops the crawl after the specified time even if depth/page limits haven’t been reached.
   - `--auto-ingest` enables automatic Supabase ingestion for pages meeting `--ingest-threshold` (defaults to 0.5). Chunk sizing/overlap can be tuned via `--ingest-chunk-size` / `--ingest-overlap`, and `--ingest-group` prefixes the Supabase `group_id`.
   - `--resume-file` persists crawl state (queue + visited set) so you can restart long crawls later. Pair with `--resume-reset` to discard existing state.
+  - `--markdown-engine` selects markdown prep backend (`docling`, `crawl4ai`, or `auto`).
+  - Crawl4AI LLM filtering controls: `--crawl4ai-provider` or `--crawl4ai-platform` + `--crawl4ai-model`, plus token options `--crawl4ai-api-token` / `--crawl4ai-api-token-env`.
+  - Equivalent env controls are available in `.env.example` (`WEB_RESEARCH_MARKDOWN_ENGINE`, `WEB_RESEARCH_CRAWL4AI_*`).
 
 ### Curation Workflow
 
@@ -179,7 +182,7 @@ you test the new pipeline.
 - `pip install -e .` keeps the base install focused on Supabase/OpenAI/RAG tooling (Docling is still included for PDF/OCR flows).
 - Add extras as needed:
   - `.[vision]` → Screen capture, OCR fallbacks, and keyboard hooks.
-  - `.[full]` → Convenience alias for `.[vision]` (install once for hosts that need every feature).
+  - `.[full]` → Vision extras plus Crawl4AI markdown filtering support.
 
 Use `study-agents-validate --groups openai,supabase,ollama` to fail fast when keys/URLs are missing. The command also ensures required directories exist and can print a short summary for deployment logs.
 

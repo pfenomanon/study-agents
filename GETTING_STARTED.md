@@ -58,6 +58,8 @@ Mode B: Local Supabase in Docker (self-hosted on VPS)
   - `./scripts/setup_local_supabase.sh`
 - This starts Supabase containers and updates `.env` with local `SUPABASE_URL`/`SUPABASE_KEY`.
 - The helper prefers a service-role key when available; this is needed for full write/ingestion capability.
+- For a single-command local bootstrap (Supabase + schema + app services), run:
+  - `bash scripts/install_backend_vps.sh start-local-all`
 
 Typical local Supabase containers started by `supabase start` include:
 - `supabase_db_*` (Postgres)
@@ -150,6 +152,12 @@ Run `backend-vps/supabase_schema.sql` in the Supabase target selected above (clo
 ```bash
 docker compose up -d --build
 docker compose ps
+```
+
+For the local Supabase all-in-one path:
+
+```bash
+bash scripts/install_backend_vps.sh start-local-all
 ```
 
 Default exposed ports:

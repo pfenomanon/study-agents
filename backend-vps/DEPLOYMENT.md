@@ -61,6 +61,12 @@ Services:
 - `scenario-service` (port 9000): Scenario API
 - Vision capture: UI card and `/copilot/capture` endpoint are available; they need a display. For headless use, post images to `/cag-ocr-answer` or run capture on a GUI host.
 
+For local self-hosted Supabase + app stack in one command:
+```bash
+bash scripts/install_backend_vps.sh start-local-all
+```
+This runs local Supabase, applies `supabase_schema.sql`, then starts the backend app services.
+
 Mounts: `.env`, `prompts/`, `data/`, `knowledge_graph/`, `research_output/` are bind-mounted so host edits are reflected live.
 
 If you choose local Supabase mode, Supabase CLI runs an additional Docker stack (`supabase_db`, `supabase_rest`, `supabase_auth`, `supabase_storage`, `supabase_realtime`, `supabase_studio`, etc.) alongside these app services.

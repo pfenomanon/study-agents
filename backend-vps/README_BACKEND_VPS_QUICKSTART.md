@@ -36,6 +36,11 @@ Optional local Supabase mode (Docker):
 ```
 This starts the local Supabase container stack and updates `.env` with local credentials.
 
+One-command local all-in-one startup (local Supabase + backend services + schema apply):
+```bash
+bash scripts/install_backend_vps.sh start-local-all
+```
+
 Optional security:
 - `API_TOKEN` (required by clients if set)
 - `COPILOT_API_KEY` (required for `/copilot/*` if set)
@@ -48,6 +53,11 @@ Transport security:
 
 ```bash
 bash scripts/install_backend_vps.sh start
+```
+
+If you are using local Supabase and want one command for everything, use:
+```bash
+bash scripts/install_backend_vps.sh start-local-all
 ```
 
 ## 5) Verify and monitor

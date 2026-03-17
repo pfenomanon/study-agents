@@ -30,11 +30,24 @@ from .rag_builder_core import ensure_dir
 from .web_research_agent import WebResearchAgent
 from .cag_agent import extract_text_from_file
 from .vision_agent import run_capture_once
+from .security import extract_auth_token, token_matches
 from .settings import SettingsError, get_settings
 
 
 app = FastAPI(title="Study Agents Copilot Service")
-COPILOT_API_KEY = os.getenv("COPILOT_API_KEY")
+COPILOT_API_KEY = (os.getenv("COPILOT_API_KEY") or os.getenv("API_TOKEN") or "").strip()
+COPILOT_REQUIRE_TOKEN = os.getenv("COPILOT_REQUIRE_TOKEN", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+if COPILOT_REQUIRE_TOKEN and not COPILOT_API_KEY:
+    raise RuntimeError(
+        "Copilot API token is required but missing. "
+        "Set COPILOT_API_KEY/API_TOKEN or disable with COPILOT_REQUIRE_TOKEN=false."
+    )
 
 
 class ChatRequest(BaseModel):
@@ -67,13 +80,12 @@ class CaptureRequest(BaseModel):
 
 
 async def require_api_key(x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None)):
-    if not COPILOT_API_KEY:
+    if not COPILOT_REQUIRE_TOKEN:
         return
-    provided = x_api_key or authorization
+    provided = extract_auth_token({"X-API-Key": x_api_key or "", "Authorization": authorization or ""})
     if not provided:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    token = provided.replace("Bearer", "").strip()
-    if token != COPILOT_API_KEY:
+    if not token_matches(COPILOT_API_KEY, provided):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 

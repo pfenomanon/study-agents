@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -10,6 +11,21 @@ from dataclasses import asdict
 
 from .kg_pipeline import KnowledgeIngestionService, episode_from_rag_artifacts
 from .rag_reasoning import RAGBuildAgent, RAGReasoningPlanner
+from .security import extract_auth_token, token_matches
+
+RAG_API_TOKEN = (os.getenv("RAG_API_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+RAG_REQUIRE_TOKEN = os.getenv("RAG_REQUIRE_TOKEN", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+if RAG_REQUIRE_TOKEN and not RAG_API_TOKEN:
+    raise RuntimeError(
+        "RAG token is required but missing. "
+        "Set RAG_API_TOKEN/API_TOKEN or disable with RAG_REQUIRE_TOKEN=false."
+    )
 
 
 async def _run_build(
@@ -43,6 +59,18 @@ def create_app() -> web.Application:
     planner = RAGReasoningPlanner()
     agent = RAGBuildAgent(planner=planner)
     ingestion_service = KnowledgeIngestionService()
+
+    @web.middleware
+    async def auth_middleware(request: web.Request, handler):
+        if RAG_REQUIRE_TOKEN:
+            provided = extract_auth_token(request.headers)
+            if not provided:
+                return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
+            if not token_matches(RAG_API_TOKEN, provided):
+                return web.json_response({"ok": False, "error": "Forbidden"}, status=403)
+        return await handler(request)
+
+    app.middlewares.append(auth_middleware)
 
     async def build_handler(request: web.Request) -> web.Response:
         try:

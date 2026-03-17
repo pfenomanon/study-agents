@@ -83,11 +83,75 @@ Common CLIs:
 - `study-agents-api` (HTTP API on port 8000)
 - `study-agents-mcp` (MCP server over stdio)
 
-## AWS Notes
-- Use a security group allowing only the needed ports (8000/8100/9010) from trusted IPs or via an ALB/reverse proxy (TLS termination recommended).
-- For EC2, install Docker + docker-compose-plugin (or use an AMI that already has them). The provided Dockerfiles include the `[full]` extra (Docling/OCR).
-- Store secrets in SSM Parameter Store/Secrets Manager and template them into `.env` at boot (e.g., via cloud-init or a systemd drop-in).
-- If using ECR, build and push images from this repo, then reference them in `docker-compose.yml` or your own ECS task definition.
+## AWS EC2 Step-by-Step (Ubuntu 24.04, 16 GB RAM, 200 GB Disk)
+
+Use this when you want AWS to match your current Hostinger VPS profile.
+
+1. Create the EC2 instance
+   ```text
+   AMI: Ubuntu Server 24.04 LTS (x86_64)
+   Instance type: t3.xlarge (4 vCPU / 16 GiB RAM) or equivalent
+   Root volume: 200 GiB gp3
+   ```
+2. Configure networking
+   - Attach an Elastic IP so the public IP remains stable.
+   - Security Group inbound rules:
+     - `22/tcp` from your admin IP only
+     - `443/tcp` from client ranges (or `0.0.0.0/0` if public)
+     - Optional temporary/debug ports: `8000`, `8100`, `9010` from your admin IP only
+   - Keep Supabase local ports (`54321+`) closed to the public internet.
+3. SSH to the server
+   ```bash
+   ssh -i /path/to/key.pem ubuntu@<EC2_PUBLIC_IP>
+   ```
+4. Install git and clone
+   ```bash
+   sudo apt-get update -y
+   sudo apt-get install -y git
+   cd /home/ubuntu
+   git clone git@github.com:pfenomanon/study-agents.git
+   cd study-agents/backend-vps
+   ```
+5. Configure environment
+   ```bash
+   cp .env.example .env
+   nano .env
+   ```
+   Required values:
+   - `OPENAI_API_KEY`
+   - `SUPABASE_URL`, `SUPABASE_KEY` (cloud mode) OR run local Supabase (next step)
+   - Any auth/API secrets you use (`API_TOKEN`, `COPILOT_API_KEY`, etc.)
+6. Choose Supabase mode
+   - Cloud Supabase: keep your hosted `SUPABASE_URL` and service-role `SUPABASE_KEY`.
+   - Local Supabase in Docker:
+     ```bash
+     chmod +x scripts/setup_local_supabase.sh
+     ./scripts/setup_local_supabase.sh
+     ```
+     This runs `supabase start` and updates `.env` with local URL/key.
+7. Start the app stack
+   ```bash
+   docker compose up -d --build
+   ```
+8. Verify containers
+   ```bash
+   docker compose ps
+   docker ps --format 'table {{.Names}}\t{{.Status}}'
+   ```
+9. Smoke test APIs from the server
+   ```bash
+   curl -sS http://127.0.0.1:8000/health || true
+   curl -sS http://127.0.0.1:9010/docs >/dev/null && echo "copilot up"
+   ```
+10. Optional: run through TLS gateway only
+    - Point DNS to the EC2 Elastic IP.
+    - Use `tls-gateway` as the public entrypoint on `443`.
+    - Keep direct app ports (`8000/8100/9010`) private.
+
+### AWS Ops Notes
+- Put secrets in AWS SSM Parameter Store or Secrets Manager, then render `.env` during bootstrap.
+- For automated startup on reboot, add a systemd service that runs `docker compose up -d` in `backend-vps/`.
+- If you move to ECR/ECS later, build/push these images and reuse the same env/secrets model.
 
 ## Validation
 After configuration, run:

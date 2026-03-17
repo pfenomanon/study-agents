@@ -8,7 +8,7 @@ services:
     environment:
       HOME: /app
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     networks:
       - backend
     restart: unless-stopped
@@ -27,11 +27,12 @@ services:
     image: study-agents-rag
     env_file: .env
     volumes:
+      - ./src:/app/src
       - ./prompts:/app/prompts
       - ./data:/app/data
       - env-vol:/env
     ports:
-      - "8100:8100"
+      - "127.0.0.1:8100:8100"
     networks:
       - backend
     restart: unless-stopped
@@ -63,7 +64,7 @@ services:
       - ./data:/app/data
       - env-vol:/env
     ports:
-      - "9010:9010"
+      - "127.0.0.1:9010:9010"
     networks:
       - backend
     entrypoint: ["/bin/sh", "-c", "/app/use_env.sh uvicorn study_agents.copilot_service:app --host 0.0.0.0 --port 9010"]
@@ -75,7 +76,7 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:-root}
       VAULT_ADDR: http://0.0.0.0:8200
     ports:
-      - "8200:8200"
+      - "127.0.0.1:8200:8200"
     networks:
       - backend
     cap_add:

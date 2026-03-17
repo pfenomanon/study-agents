@@ -254,6 +254,47 @@ The script will:
 When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show `cag-service` and `rag-service` running.
 If Supabase’s official installer is unreachable, the script automatically falls back to downloading the latest CLI binary from GitHub releases as a fallback.
 
+## AWS EC2 Quick Start (Detailed)
+
+To match your current Hostinger profile on AWS, use:
+- Ubuntu 24.04 LTS (x86_64)
+- `t3.xlarge` (16 GiB RAM)
+- 200 GiB `gp3` disk
+
+Step-by-step:
+1. Launch EC2 + Elastic IP.
+2. Security Group:
+   - allow `22` from your admin IP
+   - allow `443` for client traffic
+   - keep `8000/8100/9010` restricted (admin-only or private)
+3. SSH in and clone:
+   ```bash
+   ssh -i /path/to/key.pem ubuntu@<EC2_PUBLIC_IP>
+   sudo apt-get update -y && sudo apt-get install -y git
+   cd /home/ubuntu
+   git clone git@github.com:pfenomanon/study-agents.git
+   cd study-agents/backend-vps
+   ```
+4. Configure env:
+   ```bash
+   cp .env.example .env
+   nano .env
+   ```
+5. Choose Supabase mode:
+   - Cloud: set hosted `SUPABASE_URL` + service-role `SUPABASE_KEY`
+   - Local Docker Supabase:
+     ```bash
+     chmod +x scripts/setup_local_supabase.sh
+     ./scripts/setup_local_supabase.sh
+     ```
+6. Start the app:
+   ```bash
+   docker compose up -d --build
+   docker compose ps
+   ```
+
+For the full AWS runbook (ops/security/validation), see `backend-vps/DEPLOYMENT.md` in the repo.
+
 ## Rebuild the Bootstrap Bundle
 
 Whenever you need a fresh distributable ZIP, run this from the repo root (on your dev machine):

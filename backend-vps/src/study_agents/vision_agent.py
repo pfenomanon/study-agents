@@ -51,6 +51,7 @@ from openai import OpenAI
 
 from .ollama_client import chat as ollama_chat
 from .cag_agent import CAGAgent
+from .security import validate_outbound_url
 from .supabase_client import get_supabase_client
 
 import requests
@@ -59,6 +60,10 @@ _supabase_client = None
 _openai_client = None
 docling = DocumentConverter() if DocumentConverter is not None else None
 local_cag_agent: CAGAgent | None = None
+VISION_ALLOW_PRIVATE_REMOTE_URLS = (
+    os.getenv("VISION_ALLOW_PRIVATE_REMOTE_URLS", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 
 
 def _get_supabase():
@@ -350,16 +355,36 @@ def _call_remote_cag(
     model: str | None = None,
     ollama_target: str | None = None,
 ) -> dict:
+    url = _validate_remote_http_url(url, field_name="remote_cag_url")
     payload = {"question": question}
     payload.update(_build_runtime_payload(platform, model, ollama_target))
     headers = {}
     remote_api_token = (os.getenv("REMOTE_API_TOKEN") or "").strip()
     if remote_api_token:
         headers["X-API-Key"] = remote_api_token
-    resp = requests.post(url, json=payload, headers=headers or None, timeout=60)
+    resp = requests.post(
+        url,
+        json=payload,
+        headers=headers or None,
+        timeout=60,
+        allow_redirects=False,
+    )
     resp.raise_for_status()
     data = resp.json()
     return data
+
+
+def _validate_remote_http_url(url: str, *, field_name: str) -> str:
+    normalized = (url or "").strip()
+    if not normalized:
+        raise RuntimeError(f"{field_name} is required for remote mode")
+    allowed, reason = validate_outbound_url(
+        normalized,
+        allow_private_networks=VISION_ALLOW_PRIVATE_REMOTE_URLS,
+    )
+    if not allowed:
+        raise RuntimeError(f"{field_name} blocked: {reason}")
+    return normalized
 
 
 def run_capture_once(
@@ -414,6 +439,10 @@ def run_capture_once(
 
     if mode_normalized == "remote_image" and remote_image_url:
         try:
+            remote_image_url = _validate_remote_http_url(
+                remote_image_url,
+                field_name="remote_image_url",
+            )
             runtime_payload = _build_runtime_payload(platform, model, ollama_target)
             with open(img_path, "rb") as f:
                 headers = {}
@@ -426,6 +455,7 @@ def run_capture_once(
                     data=runtime_payload or None,
                     headers=headers or None,
                     timeout=120,
+                    allow_redirects=False,
                 )
             resp.raise_for_status()
             data = resp.json()
@@ -527,6 +557,16 @@ def main_loop(
     effective_mode = (mode or REMOTE_MODE or "local").lower()
     effective_remote_cag = remote_cag_url or REMOTE_CAG_URL
     effective_remote_image = REMOTE_IMAGE_URL
+    if effective_mode == "remote" and effective_remote_cag:
+        effective_remote_cag = _validate_remote_http_url(
+            effective_remote_cag,
+            field_name="remote_cag_url",
+        )
+    if effective_mode == "remote_image" and effective_remote_image:
+        effective_remote_image = _validate_remote_http_url(
+            effective_remote_image,
+            field_name="remote_image_url",
+        )
 
     if keyboard is None:
         raise RuntimeError(
@@ -570,6 +610,7 @@ def main_loop(
                             data=runtime_payload or None,
                             headers=headers or None,
                             timeout=120,
+                            allow_redirects=False,
                         )
                     resp.raise_for_status()
                     data = resp.json()

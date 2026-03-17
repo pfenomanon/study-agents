@@ -8,7 +8,7 @@ This repo can be moved to any Linux host (including AWS EC2) and run either nati
 - Python 3.11+
 - Docker + Docker Compose v2 (optional but recommended)
 - Network access to OpenAI/Ollama (if used) and Supabase
-- Ports to expose (typical): 8000 (CAG API), 8100 (RAG service), 9000 (Scenario API)
+- Ports to expose (typical): 8000 (CAG API), 8100 (RAG service), 9010 (Copilot API)
 - Display note: vision capture (local/remote_image) requires a display. On headless servers, use a virtual display (Xvfb) or run capture on a desktop/WSLg host and send images to the CAG OCR endpoint.
 
 ## Package → Host
@@ -58,7 +58,6 @@ Services:
 - `rag-service` (port 8100): RAG builder API
 - `utility-service`: base image for running CLI agents inside the container
 - `copilot-service` (port 9010): PydanticAI backend for CopilotKit
-- `scenario-service` (port 9000): Scenario API
 - Vision capture: UI card and `/copilot/capture` endpoint are available; they need a display. For headless use, post images to `/cag-ocr-answer` or run capture on a GUI host.
 
 For local self-hosted Supabase + app stack in one command:
@@ -85,7 +84,7 @@ Common CLIs:
 - `study-agents-mcp` (MCP server over stdio)
 
 ## AWS Notes
-- Use a security group allowing only the needed ports (8000/8100/9000) from trusted IPs or via an ALB/reverse proxy (TLS termination recommended).
+- Use a security group allowing only the needed ports (8000/8100/9010) from trusted IPs or via an ALB/reverse proxy (TLS termination recommended).
 - For EC2, install Docker + docker-compose-plugin (or use an AMI that already has them). The provided Dockerfiles include the `[full]` extra (Docling/OCR).
 - Store secrets in SSM Parameter Store/Secrets Manager and template them into `.env` at boot (e.g., via cloud-init or a systemd drop-in).
 - If using ECR, build and push images from this repo, then reference them in `docker-compose.yml` or your own ECS task definition.
@@ -104,12 +103,11 @@ curl -X POST http://localhost:8000/cag-answer \
 
 Logs:
 - Docker: `docker compose logs -f cag-service`
-- Native: check `scenario_api.log`, `frontend_dev.log`, and per-agent stderr/stdout.
+- Native: check `frontend_dev.log` and per-agent stderr/stdout.
 
 ## Security Notes
 - Prefer service-role key for backend runtime (`SUPABASE_KEY`); anon keys may limit write/ingestion paths.
 - If running local Supabase, avoid exposing Supabase ports publicly; keep them localhost-bound unless proxied intentionally.
 - Set `API_TOKEN` and `COPILOT_API_KEY` for production-facing deployments.
-- `scenario-service` (`/scenarios*`) is not token-guarded by default in this split package; keep it private or enforce auth at the reverse proxy.
 - Default compose ports are HTTP; for remote access terminate TLS (HTTPS) at a reverse proxy or load balancer.
 - Clients can send auth as `X-API-Key` or `Authorization: Bearer <token>`.

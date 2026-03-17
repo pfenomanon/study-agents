@@ -70,7 +70,6 @@ bash scripts/install_backend_vps.sh logs
 Default endpoints:
 - `POST /cag-answer` on port `8000`
 - `POST /cag-ocr-answer` on port `8000`
-- Scenario API on port `9000`
 - Copilot API on port `9010`
 
 Auth header options:

@@ -18,7 +18,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
 - `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `status`, `logs`, `stop`).
-- `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Scenario API 9000, Copilot API 9010, plus a utility image for CLIs).
+- `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, plus a utility image for CLIs).
 - `docker/*.Dockerfile`: per-service images; all include the `[full]` extra (vision/OCR). The root `Dockerfile` is a slim MCP/CLI image if you want a single-container runtime.
 
 ## Graph Inspector & Visualization
@@ -148,7 +148,6 @@ Use `docker compose up --build` from this directory to spin up **per-agent servi
 - `rag-service` (port 8100): exposes `POST /build` to trigger the reasoning-driven RAG bundle builder.
 - `utility-service`: base image kept running via `tail -f /dev/null` so you can `docker compose run utility-service ...` for any one-off CLI agent (web research, RAG ingestion, etc.) without rebuilding images.
 - `copilot-service` (port 9010): PydanticAI backend; now exposes `/copilot/capture` for capture + OCR + answer.
-- `scenario-service` (port 9000): Scenario API (`study_agents.scenario_api`) for structured scenario ingestion and Q&A.
 
 All services mount `.env`, `prompts/`, and the relevant `data/` folders so you can edit prompts or documents on the host and the containers see the changes immediately.
 
@@ -249,65 +248,10 @@ Press `Ctrl+C` to stop every managed process gracefully.
 
 ## Security Hardening
 - Set API keys for service access: `API_TOKEN` (CAG HTTP API) and `COPILOT_API_KEY` (Copilot service). Clients must send `X-API-Key` or `Authorization: Bearer <token>`.
-- `scenario-service` (`/scenarios*`) is not token-guarded by default in this split package; protect it with reverse-proxy auth and/or private networking.
 - Image uploads are size/type limited (`MAX_UPLOAD_BYTES`, PNG/JPEG only). Keep endpoints behind a reverse proxy with TLS and IP allowlists where possible.
-- Compose service ports are HTTP by default (`8000/8100/9000/9010`); terminate TLS for any external/client-facing access.
+- Compose service ports are HTTP by default (`8000/8100/9010`); terminate TLS for any external/client-facing access.
 - Containers drop root privileges (`USER app`). Bind only required ports; the default compose uses an internal `backend` network.
 - Vault (optional, OSS): a Vault dev service is included in compose. If `VAULT_ADDR`/`VAULT_TOKEN` are set, containers will attempt to fetch secrets from `kv/data/study-agents/*` via `scripts/use_env.sh` and render `/env/.env.runtime`. Default is dev/root token; replace with a secure Vault deployment for production.
-
-## Scenario Orchestration API (FastAPI)
-
-Use the Scenario API to submit structured scenarios and retrieve subject-matter-expert responses in a consistent JSON envelope.
-By default it uses the same `SUPABASE_URL` / `SUPABASE_KEY` as the rest of `study-agents`; optional `SCENARIO_SUPABASE_URL` / `SCENARIO_SUPABASE_KEY` overrides are available if needed.
-
-```bash
-# Inside the repo or utility container
-study-agents-scenario-api
-# or explicitly
-uvicorn study_agents.scenario_api:app --host 0.0.0.0 --port 9000
-```
-
-Endpoints:
-
-- `POST /scenarios` – Accepts `scenario_id`, scenario/context profile, optional carrier metadata, risk flags, etc. The payload is transformed into markdown, ingested via `KnowledgeIngestionService`, and persisted under `data/scenarios/`.
-- `GET /scenarios/{scenario_id}` – Returns the stored scenario alongside the most recent ingestion summary.
-- `POST /scenarios/{scenario_id}/questions` – Invokes the CAG agent with the correct playbook context and responds with a structured JSON object:
-  ```json
-  {
-    "scenario_id": "AUTO-TX-042",
-    "question": "What documentation is still required?",
-    "summary": "...",
-    "recommended_steps": ["Step 1", "Step 2"],
-    "analysis": {"topic_a": "...", "topic_b": "..."},
-    "coverage_analysis": {"topic_a": "...", "topic_b": "..."},
-    "documentation_checklist": [
-      {"item": "Police report", "status": "pending"},
-      {"item": "Contractor estimate", "status": "received"}
-    ],
-    "citations": [{"source": "scenario:AUTO-TX-042", "details": "loss summary"}],
-    "raw_answer": "Full LLM answer + trimmed context."
-  }
-  ```
-
-Carrier profile metadata is optional. Provide `carrier_profile.type="carrier"` plus `name`/`playbook` only when you want carrier/workflow-specific terminology overlays.
-
-## Web GUI (React + Vite)
-
-The `frontend/` directory contains a secure-by-default React/TypeScript SPA that talks to the Scenario API. It enforces HTTPS (configure your reverse proxy accordingly), uses token-based fetch calls, and never exposes secrets in client code.
-
-```bash
-cd frontend
-npm install
-VITE_SCENARIO_API_URL=https://<api-domain> npm run dev
-# Build for production
-VITE_SCENARIO_API_URL=https://<api-domain> npm run build
-```
-
-- `ScenarioForm` lets you capture structured scenarios (scenario_id, coverage items, carrier profile, risk flags). Each line in the coverage/evidence fields follows `Name|Limit|Deductible|Notes` to keep the UI compact while still producing structured data for the API.
-- `ScenarioQuestion` posts questions to `/scenarios/{id}/questions` and renders structured answers (summary, steps, analysis, documentation checklist, citations).
-- `ScenarioView` shows the currently active scenario, ingestion stats, and the most recent subject-matter-expert response (with expandable raw answer + context).
-
-Deploy the built assets behind HTTPS (Traefik/Nginx). Set `SCENARIO_API_CORS` on the API so only the GUI origin is permitted.
 
 ## Testing
 
@@ -367,7 +311,7 @@ The script will:
 4. Stop/remove any stale project containers that might be holding ports 8000/8100.
 5. Run `docker compose up -d --build`.
 
-When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show the app services (`cag-service`, `rag-service`, `scenario-service`, `copilot-service`, `utility-service`) running.
+When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show the app services (`cag-service`, `rag-service`, `copilot-service`, `utility-service`) running.
 If Supabase’s official installer is unreachable, the script automatically falls back to downloading the latest CLI binary from GitHub releases as a fallback.
 
 ## Rebuild the Bootstrap Bundle

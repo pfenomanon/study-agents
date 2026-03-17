@@ -163,7 +163,6 @@ bash scripts/install_backend_vps.sh start-local-all
 Default exposed ports:
 - `8000` `cag-service` (`/cag-answer`, `/cag-ocr-answer`)
 - `8100` `rag-service` (`/build`)
-- `9000` `scenario-service` (Scenario API)
 - `9010` `copilot-service` (`/copilot/chat`, `/copilot/capture`, `/copilot/cag-process`)
 
 ### 3.6 What Runs in Docker
@@ -173,7 +172,6 @@ App stack (`backend-vps/docker-compose.yml`):
 - `rag-service` (port `8100`)
 - `utility-service`
 - `copilot-service` (port `9010`)
-- `scenario-service` (port `9000`)
 - `vault` (dev mode, optional)
 
 If using local Supabase mode, those Supabase containers run in parallel as a separate stack managed by Supabase CLI.
@@ -209,7 +207,7 @@ docker compose down
 
 - Keep Supabase local ports bound to localhost unless you intentionally proxy them.
 - Do not expose Supabase Postgres/API ports directly to the public internet.
-- Keep only required app ports open externally (`8000`, `8100`, `9000`, `9010` as needed).
+- Keep only required app ports open externally (`8000`, `8100`, `9010` as needed).
 - Always set `API_TOKEN` and `COPILOT_API_KEY` in non-local deployments.
 - Rotate keys if shared accidentally.
 
@@ -221,10 +219,9 @@ Authentication:
 - Accepted client headers:
   - `X-API-Key: <token>`
   - `Authorization: Bearer <token>`
-- `scenario-service` (`/scenarios*`) has no built-in token guard in this split package; protect it with network controls and/or reverse-proxy auth.
 
 Encryption in transit:
-- The default compose publishes plain HTTP ports (`8000`, `8100`, `9000`, `9010`).
+- The default compose publishes plain HTTP ports (`8000`, `8100`, `9010`).
 - For internet-facing deployments, terminate TLS in front of these services (Caddy/Nginx/Traefik/ALB).
 - Use `https://` URLs from remote clients; do not expose Supabase Docker ports publicly.
 
@@ -339,10 +336,6 @@ Important groups:
   - `PROMPTS_DIR`
   - `QA_LOG_DIR`
   - `TEMP_IMAGE_DIR`
-  - `SCENARIO_STORAGE_DIR`
-- Scenario API:
-  - `SCENARIO_API_HOST`, `SCENARIO_API_PORT`, `SCENARIO_API_CORS`
-  - `SCENARIO_SUPABASE_URL`, `SCENARIO_SUPABASE_KEY`
 
 ## 6) Personalization for Non-Insurance Use Cases
 
@@ -458,8 +451,6 @@ Under `backend-vps/prompts/`:
 
 ### 6.3 Remaining Domain-Tuned Code Paths
 
-- `backend-vps/src/study_agents/scenario_api.py`
-  - still includes legacy insurance-named fields for backward compatibility, but now supports generic scenario wording (`scenario_type`, `primary_topic`) and configurable audience/instruction text
 - `backend-vps/src/study_agents/cag_agent.py`
   - fallback `_DEFAULT_ANSWER_PROMPT` is now generic subject-matter-expert guidance
 - `backend-vps/src/study_agents/mcp_server_fixed.py`
@@ -475,8 +466,7 @@ If your target domain is not insurance, start with prompt generation and then al
 2. Update any remaining prompts in `backend-vps/prompts/` not covered by families.
 3. Run smoke tests against `/cag-answer`.
 4. Ingest your own domain data into `data/` and run RAG build.
-5. If using Scenario API, align payload semantics for your app (`scenario_type`, `primary_topic`, checklist/analysis shape).
-6. Re-test with domain-specific sample questions.
+5. Re-test with domain-specific sample questions.
 
 ## 7) Data Safety and GitHub
 

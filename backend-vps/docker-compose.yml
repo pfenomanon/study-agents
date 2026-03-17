@@ -69,22 +69,6 @@ services:
     entrypoint: ["/bin/sh", "-c", "/app/use_env.sh uvicorn study_agents.copilot_service:app --host 0.0.0.0 --port 9010"]
     restart: unless-stopped
 
-  scenario-service:
-    build:
-      context: .
-      dockerfile: docker/base.Dockerfile
-    image: study-agents-scenario
-    env_file: .env
-    volumes:
-      - ./data:/app/data
-      - env-vol:/env
-    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh study-agents-scenario-api"]
-    ports:
-      - "9000:9000"
-    networks:
-      - backend
-    restart: unless-stopped
-
   vault:
     image: hashicorp/vault:1.16.2
     environment:

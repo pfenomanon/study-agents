@@ -30,12 +30,14 @@ catch {
 
 $script:GlobalKeyboardAvailable = $false
 try {
-    Add-Type -Namespace StudyAgents -Name NativeKeyboard -MemberDefinition @"
+    Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
+namespace StudyAgents {
 public static class NativeKeyboard {
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+}
 }
 "@ -ErrorAction Stop
     $script:GlobalKeyboardAvailable = $true

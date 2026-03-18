@@ -280,6 +280,8 @@ while true; do
     break
   fi
 
+  echo
+  echo "[$(date -u +%H:%M:%S)] Capturing screen region..."
   bounds="$(desktop_bounds)"
   IFS=',' read -r bx by br bb <<< "$bounds"
   bx="$(printf "%s" "$bx" | trim)"
@@ -322,6 +324,7 @@ while true; do
   [[ -n "$CAPTURE_SESSION_ID" ]] && curl_args+=(-F "capture_session_id=$CAPTURE_SESSION_ID")
 
   raw_response="$(curl "${curl_args[@]}")"
+  echo "[$(date -u +%H:%M:%S)] Capture complete."
   print_result "$raw_response"
 
   rm -f "$tmp_png"

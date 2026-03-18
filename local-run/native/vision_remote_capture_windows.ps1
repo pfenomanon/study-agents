@@ -11,6 +11,7 @@ param(
     [double]$BottomIn = 0.0,
     [double]$LeftIn = 0.0,
     [double]$RightIn = 0.0,
+    [int]$MonitorIndex = 1,
     [int]$SessionWebTtlMinutes = 120,
     [switch]$NoSessionWeb,
     [switch]$NoSessionWebOpen,
@@ -161,7 +162,14 @@ function New-CaptureImage {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
-    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $screens = [System.Windows.Forms.Screen]::AllScreens
+    if (-not $screens -or $screens.Count -lt 1) {
+        throw "No displays detected."
+    }
+    if ($MonitorIndex -lt 1 -or $MonitorIndex -gt $screens.Count) {
+        throw "Invalid -MonitorIndex $MonitorIndex. Available range: 1..$($screens.Count)"
+    }
+    $screen = $screens[$MonitorIndex - 1].Bounds
 
     $topPx = Convert-InchesToPixels -inches $TopIn -dpi $Dpi
     $bottomPx = Convert-InchesToPixels -inches $BottomIn -dpi $Dpi
@@ -327,6 +335,14 @@ Write-Host "Endpoint: $RemoteImageUrl"
 if ($ProfileId) {
     Write-Host "Profile: $ProfileId"
 }
+try {
+    Add-Type -AssemblyName System.Windows.Forms | Out-Null
+    $screens = [System.Windows.Forms.Screen]::AllScreens
+    Write-Host "MonitorIndex: $MonitorIndex (available=$($screens.Count))"
+}
+catch {
+    Write-Host "MonitorIndex: $MonitorIndex"
+}
 Write-Host "DPI: $Dpi, Margins(in): top=$TopIn left=$LeftIn right=$RightIn bottom=$BottomIn"
 Write-Host "Press 'Z' to capture. Press 'Esc' or 'Q' to quit."
 
@@ -338,8 +354,12 @@ do {
 
     $img = ""
     try {
+        Write-Host ""
+        Write-Host ("[{0}] Capturing monitor {1}..." -f ([DateTime]::UtcNow.ToString("HH:mm:ss")), $MonitorIndex)
         $img = New-CaptureImage
+        Write-Host ("[{0}] Uploading image to VPS..." -f ([DateTime]::UtcNow.ToString("HH:mm:ss")))
         $raw = Invoke-RemoteCapture -imagePath $img
+        Write-Host ("[{0}] Capture complete." -f ([DateTime]::UtcNow.ToString("HH:mm:ss")))
         Write-Result -rawJson $raw
     }
     finally {

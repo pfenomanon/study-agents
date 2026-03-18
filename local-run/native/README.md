@@ -11,6 +11,7 @@ print the session URL + access code, generate a local QR popup page, and attach
 Capture trigger behavior:
 - Press `Z` to capture/send current screen region.
 - Press `Esc` or `Q` to quit.
+- Windows only: use `-MonitorIndex <n>` (1-based) to select the display.
 
 ## Windows One-Liner (PowerShell, from any directory)
 

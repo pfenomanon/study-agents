@@ -14,6 +14,8 @@ This path requires no Python and keeps OCR/retrieval/reasoning on the VPS.
 It also starts the secure capture session flow by default (session URL + access code + local QR popup page).
 If raw download is blocked by repository privacy controls, run the local script directly: `local-run/native/vision_remote_capture_macos.sh`.
 Controls: `Z` capture, `Esc`/`Q` quit.
+The native macOS script supports global hotkeys when Swift is available; otherwise it falls back to terminal-focused key input.
+Optional monitor selection: add `--monitor-index <n>` (1-based).
 
 ## Fresh machine one-liner (no dependencies)
 

@@ -13,6 +13,8 @@ Capture trigger behavior:
 - Press `Esc` or `Q` to quit.
 - Windows only: use `-MonitorIndex <n>` (1-based) to select the display.
 - Windows listens for hotkeys globally (terminal focus not required).
+- macOS: use `--monitor-index <n>` (1-based) to select display.
+- macOS global hotkeys are enabled when Swift is available; otherwise it falls back to terminal-focused key input.
 
 ## Windows One-Liner (PowerShell, from any directory)
 

@@ -28,6 +28,22 @@ catch {
     throw "Failed to load required .NET assembly System.Net.Http. Install/update Windows PowerShell or .NET Framework."
 }
 
+$script:GlobalKeyboardAvailable = $false
+try {
+    Add-Type -Namespace StudyAgents -Name NativeKeyboard -MemberDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class NativeKeyboard {
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+}
+"@ -ErrorAction Stop
+    $script:GlobalKeyboardAvailable = $true
+}
+catch {
+    Write-Warning "Global keyboard hook unavailable. Falling back to focused console key input."
+}
+
 try {
     if ([enum]::GetNames([System.Net.SecurityProtocolType]) -contains "Tls13") {
         [System.Net.ServicePointManager]::SecurityProtocol =
@@ -242,6 +258,32 @@ function Invoke-RemoteCapture([string]$imagePath) {
 }
 
 function Wait-ForCaptureTrigger {
+    if ($script:GlobalKeyboardAvailable) {
+        $prevZ = $false
+        $prevQ = $false
+        $prevEsc = $false
+        while ($true) {
+            $zDown = ([StudyAgents.NativeKeyboard]::GetAsyncKeyState(0x5A) -band 0x8000) -ne 0   # Z
+            $qDown = ([StudyAgents.NativeKeyboard]::GetAsyncKeyState(0x51) -band 0x8000) -ne 0   # Q
+            $escDown = ([StudyAgents.NativeKeyboard]::GetAsyncKeyState(0x1B) -band 0x8000) -ne 0 # Esc
+
+            if ($escDown -and -not $prevEsc) {
+                return "exit"
+            }
+            if ($qDown -and -not $prevQ) {
+                return "exit"
+            }
+            if ($zDown -and -not $prevZ) {
+                return "capture"
+            }
+
+            $prevZ = $zDown
+            $prevQ = $qDown
+            $prevEsc = $escDown
+            Start-Sleep -Milliseconds 35
+        }
+    }
+
     while ($true) {
         try {
             $keyInfo = [System.Console]::ReadKey($true)
@@ -344,7 +386,12 @@ catch {
     Write-Host "MonitorIndex: $MonitorIndex"
 }
 Write-Host "DPI: $Dpi, Margins(in): top=$TopIn left=$LeftIn right=$RightIn bottom=$BottomIn"
-Write-Host "Press 'Z' to capture. Press 'Esc' or 'Q' to quit."
+if ($script:GlobalKeyboardAvailable) {
+    Write-Host "Global hotkeys active: press 'Z' to capture from any focused app. Press 'Esc' or 'Q' to quit."
+}
+else {
+    Write-Host "Press 'Z' to capture. Press 'Esc' or 'Q' to quit."
+}
 
 do {
     $trigger = Wait-ForCaptureTrigger

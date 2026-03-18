@@ -12,6 +12,7 @@ Capture trigger behavior:
 - Press `Z` to capture/send current screen region.
 - Press `Esc` or `Q` to quit.
 - Windows only: use `-MonitorIndex <n>` (1-based) to select the display.
+- Windows listens for hotkeys globally (terminal focus not required).
 
 ## Windows One-Liner (PowerShell, from any directory)
 

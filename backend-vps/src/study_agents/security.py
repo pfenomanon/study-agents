@@ -1,12 +1,22 @@
-"""Shared security helpers for API authentication and outbound URL validation."""
+"""Shared security helpers for API authentication, throttling, and validation."""
 from __future__ import annotations
 
 import hmac
 import re
 import socket
+import time
+from collections import defaultdict, deque
 from ipaddress import ip_address, ip_network
+from pathlib import Path
 from typing import Iterable, Mapping
 from urllib.parse import urlparse
+
+SECURITY_HEADERS: dict[str, str] = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+}
 
 _PRIVATE_NETWORKS = (
     ip_network("10.0.0.0/8"),
@@ -33,17 +43,8 @@ def extract_auth_token(headers: Mapping[str, str]) -> str:
     return authorization
 
 
-def token_matches(expected_token: str, provided_token: str) -> bool:
-    """Constant-time comparison to reduce token timing leakage."""
-    if not expected_token:
-        return True
-    if not provided_token:
-        return False
-    return hmac.compare_digest(expected_token, provided_token)
-
-
 def parse_trusted_proxy_networks(raw_value: str | None) -> tuple:
-    """Parse trusted proxy CIDRs (comma and/or whitespace-separated)."""
+    """Parse comma-separated trusted proxy CIDRs."""
     if not raw_value:
         return ()
     networks = []
@@ -95,6 +96,61 @@ def extract_client_ip(
     if remote:
         return remote
     return "unknown"
+
+
+def token_matches(expected_token: str, provided_token: str) -> bool:
+    """Constant-time comparison to reduce token timing leakage."""
+    if not expected_token:
+        return True
+    if not provided_token:
+        return False
+    return hmac.compare_digest(expected_token, provided_token)
+
+
+class RateLimiter:
+    """Simple in-memory sliding-window rate limiter."""
+
+    def __init__(self, max_requests: int, window_seconds: int = 60):
+        self.max_requests = max(1, int(max_requests))
+        self.window_seconds = max(1, int(window_seconds))
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+
+    def allow(self, key: str) -> tuple[bool, int]:
+        now = time.monotonic()
+        history = self._events[key]
+        cutoff = now - self.window_seconds
+        while history and history[0] <= cutoff:
+            history.popleft()
+        if len(history) >= self.max_requests:
+            retry_after = int(self.window_seconds - (now - history[0])) + 1
+            return False, max(1, retry_after)
+        history.append(now)
+        return True, 0
+
+
+def parse_allowed_roots(raw_value: str | None, defaults: Iterable[Path]) -> tuple[Path, ...]:
+    """Build an absolute allowlist of filesystem roots from env and defaults."""
+    roots: list[Path] = []
+    if raw_value:
+        for token in raw_value.split(","):
+            token = token.strip()
+            if token:
+                roots.append(Path(token).expanduser().resolve())
+    for default in defaults:
+        resolved = Path(default).expanduser().resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+    return tuple(roots)
+
+
+def is_path_within_roots(candidate: Path, roots: Iterable[Path]) -> bool:
+    """Return True if candidate path resides under one of the allowed roots."""
+    resolved_candidate = candidate.expanduser().resolve()
+    for root in roots:
+        resolved_root = Path(root).expanduser().resolve()
+        if resolved_candidate == resolved_root or resolved_candidate.is_relative_to(resolved_root):
+            return True
+    return False
 
 
 def validate_outbound_url(url: str, *, allow_private_networks: bool = False) -> tuple[bool, str]:

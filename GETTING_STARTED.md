@@ -229,6 +229,32 @@ Encryption in transit:
 
 Use `local-run/` when running screenshot capture on an end-user machine and sending OCR/questions to the VPS APIs.
 
+### 4.0 Zero-Python Client Path (recommended for most end users)
+
+This mode captures a local screenshot and sends only the image to VPS `POST /cag-ocr-answer`.
+OCR + retrieval + reasoning run on the VPS.
+The native scripts bootstrap secure session handling by default:
+- Creates `/capture-session/start`
+- Prints `access_url` + 6-character `access_code`
+- Opens a local QR popup page
+- Sends `capture_session_id` with each image upload
+
+Windows one-liner (PowerShell, any directory):
+
+```powershell
+$u='https://raw.githubusercontent.com/pfenomanon/study-agents/main/local-run/native/vision_remote_capture_windows.ps1'; $p=Join-Path $env:TEMP 'study-agents-remote-capture.ps1'; Invoke-WebRequest -UseBasicParsing $u -OutFile $p; & $p -RemoteImageUrl 'https://<your-vps>/cag-ocr-answer' -ApiToken '<optional-api-token>' -ProfileId 'generic' -Dpi 96 -TopIn 1.0 -LeftIn 0.5 -RightIn 0.5 -BottomIn 1.0 -Loop
+```
+
+macOS one-liner (Terminal, any directory):
+
+```bash
+bash -lc 'tmp="$(mktemp /tmp/study-agents-remote-capture.XXXXXX.sh)" && curl -fsSL https://raw.githubusercontent.com/pfenomanon/study-agents/main/local-run/native/vision_remote_capture_macos.sh -o "$tmp" && chmod +x "$tmp" && "$tmp" --remote-image-url "https://<your-vps>/cag-ocr-answer" --api-token "<optional-api-token>" --profile-id generic --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0 --loop'
+```
+
+If your GitHub repository is private and raw download is blocked for end users, distribute the two local scripts directly:
+- `local-run/native/vision_remote_capture_windows.ps1`
+- `local-run/native/vision_remote_capture_macos.sh`
+
 ### 4.1 Windows PC (no preinstalled dependencies assumed)
 
 If Git is not installed yet, install it first:

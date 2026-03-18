@@ -2,6 +2,18 @@
 
 Use this package on each macOS local machine.
 
+## Zero-Python one-liner (VPS does OCR/CAG)
+
+Run from any directory in Terminal:
+
+```bash
+bash -lc 'tmp="$(mktemp /tmp/study-agents-remote-capture.XXXXXX.sh)" && curl -fsSL https://raw.githubusercontent.com/pfenomanon/study-agents/main/local-run/native/vision_remote_capture_macos.sh -o "$tmp" && chmod +x "$tmp" && "$tmp" --remote-image-url "https://<your-vps>/cag-ocr-answer" --api-token "<optional-api-token>" --profile-id generic --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0 --loop'
+```
+
+This path requires no Python and keeps OCR/retrieval/reasoning on the VPS.
+It also starts the secure capture session flow by default (session URL + access code + local QR popup page).
+If raw download is blocked by repository privacy controls, run the local script directly: `local-run/native/vision_remote_capture_macos.sh`.
+
 ## Fresh machine one-liner (no dependencies)
 
 ```bash

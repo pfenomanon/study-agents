@@ -37,6 +37,10 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 
 ### Vision Agent Modes & Margins
 
+- Native no-Python remote capture clients are available under `../local-run/native/`:
+  - `vision_remote_capture_windows.ps1`
+  - `vision_remote_capture_macos.sh`
+  These clients capture locally, bootstrap secure capture sessions (`/capture-session/start`), then send images to `/cag-ocr-answer`; OCR/CAG stays on VPS.
 - Run the vision agent as a module so you can pass margins in inches (converted using `--dpi`, default 96):
   - `python -m study_agents.vision_agent --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0`
 - Modes are controlled by `REMOTE_MODE` (env) or `--mode`:

@@ -20,6 +20,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+try {
+    Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+}
+catch {
+    throw "Failed to load required .NET assembly System.Net.Http. Install/update Windows PowerShell or .NET Framework."
+}
+
+try {
+    if ([enum]::GetNames([System.Net.SecurityProtocolType]) -contains "Tls13") {
+        [System.Net.ServicePointManager]::SecurityProtocol =
+            [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+    }
+    else {
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    }
+}
+catch {
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+}
+
 if ($Platform -and @("openai", "ollama") -notcontains $Platform) {
     throw "Invalid -Platform '$Platform'. Expected openai or ollama."
 }

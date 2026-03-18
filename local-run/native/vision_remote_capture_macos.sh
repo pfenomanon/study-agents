@@ -249,16 +249,37 @@ print_result() {
   fi
 }
 
+wait_for_trigger() {
+  while true; do
+    IFS= read -rsn1 key
+    if [[ "$key" == $'\e' ]]; then
+      return 1
+    fi
+    key_lc="${key,,}"
+    if [[ "$key_lc" == "q" ]]; then
+      return 1
+    fi
+    if [[ "$key_lc" == "z" ]]; then
+      return 0
+    fi
+  done
+}
+
 echo "Mode: remote_image (native macOS client)"
 echo "Endpoint: $REMOTE_IMAGE_URL"
 [[ -n "$PROFILE_ID" ]] && echo "Profile: $PROFILE_ID"
 echo "DPI: $DPI, Margins(in): top=$TOP_IN left=$LEFT_IN right=$RIGHT_IN bottom=$BOTTOM_IN"
+echo "Press 'Z' to capture. Press 'Esc' or 'Q' to quit."
 
 if [[ "$SESSION_WEB" == "1" ]]; then
   create_remote_capture_session
 fi
 
 while true; do
+  if ! wait_for_trigger; then
+    break
+  fi
+
   bounds="$(desktop_bounds)"
   IFS=',' read -r bx by br bb <<< "$bounds"
   bx="$(printf "%s" "$bx" | trim)"
@@ -307,11 +328,6 @@ while true; do
   trap - EXIT
 
   if [[ "$LOOP_MODE" != "1" ]]; then
-    break
-  fi
-
-  read -r -p "Press Enter to capture again, or type q to quit: " next
-  if [[ "${next,,}" == "q" || "${next,,}" == "quit" || "${next,,}" == "exit" ]]; then
     break
   fi
 done

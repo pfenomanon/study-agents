@@ -168,36 +168,71 @@ function New-CaptureImage {
 }
 
 function Invoke-RemoteCapture([string]$imagePath) {
-    $curlArgs = @(
-        "-sS",
-        "-X", "POST",
-        $RemoteImageUrl,
-        "-F", "image=@$imagePath;type=image/png"
-    )
-    if ($ApiToken) {
-        $curlArgs += @("-H", "X-API-Key: $ApiToken")
-    }
+    $client = New-Object System.Net.Http.HttpClient
+    $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, $RemoteImageUrl)
+    $multipart = New-Object System.Net.Http.MultipartFormDataContent
+    $bytes = [System.IO.File]::ReadAllBytes($imagePath)
+    $imageContent = New-Object System.Net.Http.ByteArrayContent($bytes)
+    $imageContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("image/png")
+    $multipart.Add($imageContent, "image", [System.IO.Path]::GetFileName($imagePath))
+
     if ($ProfileId) {
-        $curlArgs += @("-F", "profile_id=$ProfileId")
+        $multipart.Add((New-Object System.Net.Http.StringContent($ProfileId)), "profile_id")
     }
     if ($Platform) {
-        $curlArgs += @("-F", "platform=$Platform")
+        $multipart.Add((New-Object System.Net.Http.StringContent($Platform)), "platform")
     }
     if ($Model) {
-        $curlArgs += @("-F", "model=$Model")
+        $multipart.Add((New-Object System.Net.Http.StringContent($Model)), "model")
     }
     if ($OllamaTarget) {
-        $curlArgs += @("-F", "ollama_target=$OllamaTarget")
+        $multipart.Add((New-Object System.Net.Http.StringContent($OllamaTarget)), "ollama_target")
     }
     if ($script:CaptureSessionId) {
-        $curlArgs += @("-F", "capture_session_id=$script:CaptureSessionId")
+        $multipart.Add((New-Object System.Net.Http.StringContent($script:CaptureSessionId)), "capture_session_id")
     }
 
-    $raw = & curl.exe @curlArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "curl.exe failed with exit code $LASTEXITCODE"
+    $request.Content = $multipart
+    if ($ApiToken) {
+        $request.Headers.TryAddWithoutValidation("X-API-Key", $ApiToken) | Out-Null
     }
-    return $raw
+
+    try {
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw "Remote upload failed: HTTP $([int]$response.StatusCode) $($response.ReasonPhrase) - $raw"
+        }
+        return $raw
+    }
+    finally {
+        $imageContent.Dispose()
+        $multipart.Dispose()
+        $request.Dispose()
+        $client.Dispose()
+    }
+}
+
+function Wait-ForCaptureTrigger {
+    while ($true) {
+        try {
+            $keyInfo = [System.Console]::ReadKey($true)
+        }
+        catch {
+            # Non-interactive host fallback: proceed immediately.
+            return "capture"
+        }
+        $char = [string]$keyInfo.KeyChar
+        if ($keyInfo.Key -eq [System.ConsoleKey]::Escape) {
+            return "exit"
+        }
+        if ($char -and $char.ToLowerInvariant() -eq "q") {
+            return "exit"
+        }
+        if ($char -and $char.ToLowerInvariant() -eq "z") {
+            return "capture"
+        }
+    }
 }
 
 function Write-Result([string]$rawJson) {
@@ -273,8 +308,14 @@ if ($ProfileId) {
     Write-Host "Profile: $ProfileId"
 }
 Write-Host "DPI: $Dpi, Margins(in): top=$TopIn left=$LeftIn right=$RightIn bottom=$BottomIn"
+Write-Host "Press 'Z' to capture. Press 'Esc' or 'Q' to quit."
 
 do {
+    $trigger = Wait-ForCaptureTrigger
+    if ($trigger -eq "exit") {
+        break
+    }
+
     $img = ""
     try {
         $img = New-CaptureImage
@@ -288,10 +329,6 @@ do {
     }
 
     if (-not $Loop) {
-        break
-    }
-    $next = Read-Host "Press Enter to capture again, or type q to quit"
-    if ($next -match "^(q|quit|exit)$") {
         break
     }
 }

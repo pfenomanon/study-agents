@@ -13,6 +13,7 @@ bash -lc 'tmp="$(mktemp /tmp/study-agents-remote-capture.XXXXXX.sh)" && curl -fs
 This path requires no Python and keeps OCR/retrieval/reasoning on the VPS.
 It also starts the secure capture session flow by default (session URL + access code + local QR popup page).
 If raw download is blocked by repository privacy controls, run the local script directly: `local-run/native/vision_remote_capture_macos.sh`.
+Controls: `Z` capture, `Esc`/`Q` quit.
 
 ## Fresh machine one-liner (no dependencies)
 

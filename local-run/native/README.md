@@ -8,6 +8,9 @@ All OCR + retrieval + reasoning stay on the VPS side.
 By default, both scripts also start a secure capture session (`/capture-session/start`),
 print the session URL + access code, generate a local QR popup page, and attach
 `capture_session_id` to each uploaded capture.
+Capture trigger behavior:
+- Press `Z` to capture/send current screen region.
+- Press `Esc` or `Q` to quit.
 
 ## Windows One-Liner (PowerShell, from any directory)
 

@@ -13,6 +13,7 @@ $u='https://raw.githubusercontent.com/pfenomanon/study-agents/main/local-run/nat
 This path requires no Python and keeps OCR/retrieval/reasoning on the VPS.
 It also starts the secure capture session flow by default (session URL + access code + local QR popup page).
 If raw download is blocked by repository privacy controls, run the local script directly: `local-run/native/vision_remote_capture_windows.ps1`.
+Controls: `Z` capture, `Esc`/`Q` quit.
 
 ## 1) Open a terminal
 

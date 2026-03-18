@@ -1,12 +1,16 @@
 # src/study_agents/vision_agent.py
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
+import webbrowser
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .config import (
     SUPABASE_URL,
@@ -20,7 +24,7 @@ from .config import (
     OLLAMA_API_KEY,
     SCREENSHOT_DIR,
 )
-from .prompt_loader import load_prompt
+from .prompt_loader import load_required_prompt
 
 # --- ENV for Ollama Cloud/local ---
 if OLLAMA_HOST:
@@ -49,7 +53,6 @@ except Exception as e:  # pragma: no cover - optional dependency
     DocumentConverter = None
 from openai import OpenAI
 
-from .ollama_client import chat as ollama_chat
 from .cag_agent import CAGAgent
 from .security import validate_outbound_url
 from .supabase_client import get_supabase_client
@@ -80,18 +83,7 @@ def _get_openai():
     return _openai_client
 
 # ---------------- REASONING ROLE ----------------
-_DEFAULT_VISION_PROMPT = """You are a subject-matter-expert assistant.
-Prioritize the retrieved CONTEXT when answering the question extracted from the screenshot.
-If the context is thin or missing, you may rely on broader professional expertise and explicitly note that it comes from prior knowledge.
-Provide reasoning concisely with practical relevance.
-
-Format:
-Answer: <concise answer>
-Rationale: <brief justification>
-Citations: <qa_id(s) or 'Professional knowledge'>
-"""
-
-REASONING_SYSTEM = load_prompt("vision_reasoning.txt", _DEFAULT_VISION_PROMPT)
+REASONING_SYSTEM = load_required_prompt("vision_reasoning.txt")
 
 
 # ---------------- SCREEN CAPTURE ----------------
@@ -146,6 +138,301 @@ def capture_monitor(
 
 
 # ---------------- OCR + QUESTION EXTRACTION ----------------
+def _normalize_ocr_text(text: str) -> str:
+    """Best-effort cleanup for OCR output with collapsed whitespace."""
+    normalized = text.replace("\u00a0", " ").replace("\r\n", "\n").replace("\r", "\n")
+    cleaned_lines: list[str] = []
+    for raw in normalized.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = re.sub(r"\s+", " ", line)
+        # If OCR collapsed most spaces, recover likely boundaries.
+        space_ratio = line.count(" ") / max(len(line), 1)
+        if len(line) >= 12 and space_ratio < 0.03:
+            line = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", line)
+            line = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", line)
+            line = re.sub(r"(?<=\d)(?=[A-Za-z])", " ", line)
+            line = re.sub(r"(?<=[\)\]\}:;,\.\?!])(?=[A-Za-z0-9])", " ", line)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+
+def _space_ratio(text: str) -> float:
+    compact = text.strip()
+    if not compact:
+        return 0.0
+    return compact.count(" ") / max(len(compact), 1)
+
+
+def _looks_collapsed_text(text: str) -> bool:
+    compact = text.strip()
+    return len(compact) >= 60 and _space_ratio(compact) < 0.04
+
+
+def _run_pytesseract_ocr(image_path: Path) -> str:
+    try:
+        import pytesseract
+        from PIL import Image
+
+        return (pytesseract.image_to_string(Image.open(str(image_path))) or "").strip()
+    except Exception as exc:
+        print(f"⚠️ pytesseract fallback failed: {exc}")
+        return ""
+
+
+def _clean_extracted_question_text(question_text: str) -> str:
+    """Remove common UI/metadata noise from OCR question text."""
+    if not question_text:
+        return ""
+
+    noise_markers = (
+        "expert insurance adjuster console",
+        "submit structured scenarios",
+        "workflow-aligned questions",
+        "grounded answers",
+    )
+    progress_only_pattern = (
+        r"(?i)^\s*(?:[<>\[\]\(\){}«»‹›←→\-–—]+\s*)*"
+        r"(?:tomorrow\s+)?[qgo0]uestion\s+\d+\s*(?:of|/)\s*\d+\b"
+        r"(?:\s*[<>\[\]\(\){}«»‹›←→\-–—]+)*\s*$"
+    )
+    progress_prefix_pattern = (
+        r"(?i)^\s*(?:[<>\[\]\(\){}«»‹›←→\-–—]+\s*)*"
+        r"(?:tomorrow\s+)?[qgo0]uestion\s+\d+\s*(?:of|/)\s*\d+\b"
+        r"\s*[:\-–—]?\s*"
+    )
+    progress_pattern = r"(?i)\s*(?:tomorrow\s+)?[qgo0]uestion\s+\d+\s*(?:of|/)\s*\d+\b.*$"
+    qsearch_pattern = r"(?i)\bq\s*search\b.*$"
+
+    def _is_noise_line(line: str) -> bool:
+        compact = (line or "").strip()
+        if not compact:
+            return True
+        if re.fullmatch(r"(?i)[\-–—]?\s*\d{1,2}:\d{2}\s*(?:AM|PM)?", compact):
+            return True
+        if re.fullmatch(r"(?i)[\-–—]?\s*\d{1,2}\s*(?:AM|PM)", compact):
+            return True
+        if re.fullmatch(r"(?i)[\-–—]?\s*of\s+\d{1,4}\b", compact):
+            return True
+        if re.fullmatch(progress_only_pattern, compact):
+            return True
+        if re.search(r"(?i)\bsubmit\s*answer\b", compact):
+            return True
+        if re.search(r"(?i)\b(?:tempstorise|temporise)\b", compact):
+            return True
+        if re.search(r"(?i)\b\d+\s*x\s*\d+\b", compact):
+            return True
+        if re.search(r"(?i)\b\d+(?:\.\d+)?\s*(?:kb|mb|gb)\b", compact):
+            return True
+        if re.fullmatch(r"(?i)[\-–—]?\s*\d{1,2}/\d{1,2}/\d{2,4}\s*", compact):
+            return True
+        if re.fullmatch(r"(?i)[\-–—]?\s*\d{1,3}\s*°\s*[fc](?:\s+\w+)?", compact):
+            return True
+        return False
+
+    cleaned_lines: list[str] = []
+    for raw_line in question_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Remove progress/navigation fragments early so later prefix-stripping
+        # does not leave stem artifacts like "of 150".
+        if re.fullmatch(progress_only_pattern, line):
+            continue
+        line = re.sub(progress_prefix_pattern, "", line)
+
+        # Remove markdown heading markers and optional "Question:" prefixes.
+        line = re.sub(r"^\s*#+\s*", "", line)
+        line = re.sub(r"(?i)^\s*question\s*:\s*", "", line)
+        line = re.sub(r"(?i)^\s*question\s+\d+\s*(?:[\)\.\-:]?\s*)", "", line)
+        line = re.sub(r"^\s*\d{2,3}\s*[\)\.\-:]\s*", "", line)
+        line = re.sub(r"(?i)\bq\s*search\b", "", line)
+        line = re.sub(r"(?i)\bsubmit\s*answer\b", "", line)
+        line = re.sub(r"(?i)^\s*\d{1,3}\s*°\s*[fc]\b", "", line)
+        line = re.sub(
+            r"(?i)^\s*(?:sunny|cloudy|rainy|stormy|windy|snowy|clear|overcast)\b",
+            "",
+            line,
+        )
+
+        # Remove UI navigation/status fragments (e.g., "Question 93 of 150", "QSearch").
+        line = re.sub(progress_pattern, "", line)
+        line = re.sub(qsearch_pattern, "", line)
+
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line or _is_noise_line(line):
+            continue
+
+        lowered = line.lower()
+        if any(marker in lowered for marker in noise_markers):
+            if "?" not in line:
+                continue
+            for marker in noise_markers:
+                line = re.sub(re.escape(marker), "", line, flags=re.IGNORECASE)
+            line = re.sub(r"\s+", " ", line).strip(" -|:\n\t")
+            if not line:
+                continue
+
+        cleaned_lines.append(line)
+
+    if not cleaned_lines:
+        fallback = re.sub(r"^\s*#+\s*", "", question_text.strip())
+        fallback = re.sub(progress_prefix_pattern, "", fallback)
+        fallback = re.sub(r"(?i)^\s*question\s*:\s*", "", fallback)
+        fallback = re.sub(r"(?i)^\s*question\s+\d+\s*(?:[\)\.\-:]?\s*)", "", fallback)
+        fallback = re.sub(r"(?i)\bq\s*search\b", "", fallback)
+        fallback = re.sub(r"(?i)\bsubmit\s*answer\b", "", fallback)
+        fallback = re.sub(progress_pattern, "", fallback)
+        fallback = re.sub(qsearch_pattern, "", fallback)
+        fallback = re.sub(r"(?i)^\s*of\s+\d{1,4}\b\s*", "", fallback)
+        for marker in noise_markers:
+            fallback = re.sub(re.escape(marker), "", fallback, flags=re.IGNORECASE)
+        fallback = re.sub(r"\s+", " ", fallback).strip(" -|:\n\t")
+        if "?" not in fallback and any(marker in question_text.lower() for marker in noise_markers):
+            return ""
+        return fallback
+
+    return "\n".join(cleaned_lines).strip()
+
+
+def _normalize_option_text(raw_option: str) -> str:
+    """Normalize a possible answer option and remove trailing UI artifacts."""
+    option = (raw_option or "").strip()
+    if not option:
+        return ""
+
+    option = re.sub(r"(?i)^\s*(?:option|options|choice|choices)\s*:\s*", "", option)
+    option = re.sub(r"^(?:[A-Da-d]|\d{1,2})[\)\.\-:]\s*", "", option)
+    option = re.sub(r"^\s*[-•]?\s*\[\s*[xX ]?\s*\]\s*", "", option)
+    option = re.sub(r"(?i)\bq\s*search\b", "", option)
+    option = re.sub(r"(?i)\bsearch\b", "", option)
+    option = re.sub(r"(?i)\s*(?:tomorrow\s+)?[qgo0]uestion\s+\d+\s*(?:of|/)\s*\d+\b.*$", "", option)
+    option = re.sub(r"(?i)\bqsearch\b.*$", "", option)
+    option = re.sub(r"(?i)\bsearch\b.*$", "", option)
+    option = re.sub(r"(?i)\bsubmit\s*answer\b.*$", "", option)
+    option = re.sub(r"(?i)\b(?:tempstorise|temporise)\b.*$", "", option)
+    option = re.sub(
+        r"(?i)\s+(?:submit\s*answer|tempstorise|temporise|next\s+\w+|\d{1,2}:\d{2}\s*(?:am|pm)|\d{1,2}\s*(?:am|pm)|\d{1,3}\s*°\s*[fc]|q\s*search).*$",
+        "",
+        option,
+    )
+    option = re.sub(r"\s+", " ", option).strip(" -|:\n\t")
+    if re.fullmatch(r"(?i)\d{1,2}:\d{2}\s*(?:AM|PM)?", option):
+        return ""
+    if re.fullmatch(r"(?i)\d{1,2}\s*(?:AM|PM)", option):
+        return ""
+    if re.search(r"(?i)\b\d+\s*x\s*\d+\b", option):
+        return ""
+    if re.search(r"(?i)\b\d+(?:\.\d+)?\s*(?:kb|mb|gb)\b", option):
+        return ""
+    if re.fullmatch(r"\s*\d{1,2}/\d{1,2}/\d{2,4}\s*", option):
+        return ""
+    if re.fullmatch(r"(?i)\d{1,3}\s*°\s*[fc](?:\s+\w+)?", option):
+        return ""
+    if re.fullmatch(r"(?i)of\s+\d{1,3}(?:\s+of\s+\d{1,3})?", option):
+        return ""
+    if re.fullmatch(r"%\s*\d{1,3}", option):
+        return ""
+    return option
+
+
+def _build_structured_question_with_options(raw_text: str) -> str:
+    """Extract a clean question stem with options from OCR text."""
+    cleaned = _clean_extracted_question_text(raw_text)
+    if not cleaned:
+        return ""
+
+    option_prefix = re.compile(r"^(?:[A-Da-d]|\d{1,2})[\)\.\-:]\s*")
+    lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+
+    explicit_options: list[str] = []
+    non_option_lines: list[str] = []
+    for line in lines:
+        lower = line.lower()
+        if lower in {"option:", "options:", "choices:", "choice:"}:
+            continue
+        if option_prefix.match(line):
+            opt = _normalize_option_text(line)
+            if opt:
+                explicit_options.append(opt)
+            continue
+        if re.match(r"^[-•]\s+", line):
+            opt = _normalize_option_text(re.sub(r"^[-•]\s+", "", line))
+            if opt:
+                explicit_options.append(opt)
+            continue
+        non_option_lines.append(line)
+
+    non_option_blob = " ".join(non_option_lines).strip()
+    stem = ""
+    tail = ""
+    if "?" in non_option_blob:
+        stem_part, tail = non_option_blob.split("?", 1)
+        stem = f"{stem_part.strip()}?"
+    elif non_option_lines:
+        stem = non_option_lines[0]
+        tail = " ".join(non_option_lines[1:])
+
+    stem = re.sub(r"(?i)^\s*question\s*:\s*", "", stem).strip()
+    stem = re.sub(r"(?i)^\s*question\s+\d+\s*(?:[\)\.\-:]?\s*)", "", stem).strip()
+    stem = re.sub(r"^\s*\d{2,3}\s*[\)\.\-:]\s*", "", stem).strip()
+    stem = re.sub(r"(?i)\bq\s*search\b", "", stem).strip()
+    stem = re.sub(r"(?i)^\s*\d{1,3}\s*°\s*[fc]\b", "", stem).strip()
+    stem = re.sub(
+        r"(?i)^\s*(?:sunny|cloudy|rainy|stormy|windy|snowy|clear|overcast)\b",
+        "",
+        stem,
+    ).strip()
+    stem = re.sub(r"(?i)\bsubmit\s*answer\b.*$", "", stem).strip()
+    stem = re.sub(r"(?i)\b(?:tempstorise|temporise)\b.*$", "", stem).strip()
+    stem = re.sub(r"\s+", " ", stem).strip()
+    if re.fullmatch(r"(?i)of\s+\d{1,4}\b", stem):
+        stem = ""
+
+    inline_options: list[str] = []
+    inline_source = tail.strip()
+    if inline_source:
+        inline_source = re.split(
+            r"(?i)\b(?:submit\s*answer|tempstorise|temporise|q\s*search|next\s+\w+)\b",
+            inline_source,
+            maxsplit=1,
+        )[0].strip()
+        chunks = re.split(r"\s(?:-|–|—|•)\s+", inline_source)
+        if len(chunks) > 1:
+            for chunk in chunks:
+                opt = _normalize_option_text(chunk)
+                if opt:
+                    inline_options.append(opt)
+        else:
+            opt = _normalize_option_text(inline_source)
+            if opt:
+                inline_options.append(opt)
+
+    options: list[str] = []
+    seen: set[str] = set()
+    for candidate in [*explicit_options, *inline_options]:
+        key = candidate.casefold()
+        if len(candidate) < 3 and not re.fullmatch(
+            r"\$?\d+(?:,\d{3})*(?:\.\d+)?%?",
+            candidate.strip(),
+        ):
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append(candidate)
+
+    if stem and options:
+        return stem + "\nOptions:\n" + "\n".join(f"- {opt}" for opt in options)
+    if stem:
+        return stem
+
+    # Last resort: return cleaned text if parsing fails.
+    return cleaned
+
+
 def extract_question_with_docling(image_path: Path) -> str:
     """
     Extracts text from a screenshot using Docling OCR and falls back to RapidOCR if Docling returns nothing.
@@ -210,17 +497,21 @@ def extract_question_with_docling(image_path: Path) -> str:
         except Exception as e:
             print(f"⚠️ RapidOCR fallback failed: {e}")
 
-    # Final fallback: pytesseract (useful when RapidOCR runtime/model download fails on servers)
+    # Spacing recovery: RapidOCR can return collapsed words for English UI text.
+    if text and _looks_collapsed_text(text):
+        print("⚠️ OCR text appears collapsed; trying pytesseract spacing recovery.")
+        tesseract_text = _run_pytesseract_ocr(image_path)
+        if tesseract_text and _space_ratio(tesseract_text) > _space_ratio(text):
+            text = tesseract_text
+
+    # Final fallback: pytesseract (useful when prior OCR returns no text)
     if not text:
         print("⚠️ RapidOCR produced no text. Trying pytesseract fallback.")
-        try:
-            import pytesseract
-            from PIL import Image
-
-            text = pytesseract.image_to_string(Image.open(str(image_path)))
-        except Exception as e:
-            print(f"⚠️ pytesseract fallback failed: {e}")
+        text = _run_pytesseract_ocr(image_path)
+        if not text:
             return ""
+
+    text = _normalize_ocr_text(text)
 
     if not text.strip():
         print("⚠️ OCR produced no usable text.")
@@ -228,21 +519,7 @@ def extract_question_with_docling(image_path: Path) -> str:
 
     print("\n🧾 [OCR Raw Output]\n", text[:1000], "\n")
 
-    # Parse question and options
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    q_lines, options = [], []
-    for line in lines:
-        lower = line.lower()
-        if lower.startswith(("a)", "b)", "c)", "d)", "1.", "2.", "3.")):
-            options.append(line)
-        else:
-            q_lines.append(line)
-
-    question_text = " ".join(q_lines)
-    if options:
-        question_text += "\nOptions:\n" + "\n".join(options)
-
-    return question_text.strip()
+    return _build_structured_question_with_options(text)
 
 
 # ---------------- EMBEDDING & RETRIEVAL ----------------
@@ -283,29 +560,39 @@ def retrieve_context(question: str, threshold: float = 0.1, k: int = 10):
 
 
 # ---------------- REASONING ----------------
-def reason_answer(question: str, context: str, used_ids=None) -> str:
-    if not context.strip():
-        context = "(Context unavailable; rely on professional knowledge.)"
+def reason_answer(
+    question: str,
+    context: str,
+    used_ids=None,
+    *,
+    platform: str | None = None,
+    model: str | None = None,
+    ollama_target: str | None = None,
+) -> str:
     used_ids = used_ids or []
-    user_prompt = (
-        f"QUESTION:\n{question}\n\n"
-        f"CONTEXT:\n{context}\n\n"
-        f"RETRIEVED_IDS: {', '.join(used_ids)}"
-    )
-    result = ollama_chat(
-        model=REASON_MODEL,
-        messages=[
-            {"role": "system", "content": REASONING_SYSTEM},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
     try:
-        # Newer ollama Python client returns .message.content; older might be dict
-        if isinstance(result, dict):
-            return result["message"]["content"].strip()
-        return result.message["content"].strip()
-    except Exception:
-        return "⚠️ No valid output from reasoning model."
+        global local_cag_agent
+        if local_cag_agent is None:
+            local_cag_agent = CAGAgent()
+        runtime = local_cag_agent.resolve_reasoning_runtime(
+            platform=platform,
+            model=model,
+            ollama_target=ollama_target,
+        )
+
+        return local_cag_agent._generate_answer_with_context(
+            question,
+            context,
+            runtime={
+                "platform": runtime.get("platform"),
+                "model": runtime.get("model") or REASON_MODEL,
+                "ollama_target": runtime.get("ollama_target"),
+                "ollama_host": runtime.get("ollama_host"),
+                "ollama_api_key": runtime.get("ollama_api_key"),
+            },
+        )
+    except Exception as exc:
+        return f"⚠️ No valid output from reasoning model. ({exc})"
 
 
 def _call_remote_inspect_graph(question: str, mcp_host: str) -> str:
@@ -336,6 +623,7 @@ def _build_runtime_payload(
     platform: str | None = None,
     model: str | None = None,
     ollama_target: str | None = None,
+    profile_id: str | None = None,
 ) -> dict:
     payload: dict[str, str] = {}
     if platform:
@@ -344,7 +632,67 @@ def _build_runtime_payload(
         payload["model"] = model.strip()
     if ollama_target:
         payload["ollama_target"] = ollama_target.strip()
+    if profile_id:
+        payload["profile_id"] = profile_id.strip()
     return payload
+
+
+def _extract_cli_answer_sections(answer_text: str) -> dict[str, str]:
+    """Normalize free-form model output into Answer/Rationale/Citations."""
+    sections = {"Answer": "", "Rationale": "", "Citations": ""}
+    current: str | None = None
+
+    for raw_line in (answer_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("answer:"):
+            current = "Answer"
+            sections[current] = line.split(":", 1)[1].strip()
+            continue
+        if lowered.startswith("rationale:"):
+            current = "Rationale"
+            sections[current] = line.split(":", 1)[1].strip()
+            continue
+        if lowered.startswith("citations:"):
+            current = "Citations"
+            sections[current] = line.split(":", 1)[1].strip()
+            continue
+        if current:
+            sections[current] = f"{sections[current]} {line}".strip()
+
+    if not any(sections.values()):
+        sections["Answer"] = (answer_text or "").strip()
+    if not sections["Rationale"]:
+        sections["Rationale"] = "N/A"
+    if not sections["Citations"]:
+        sections["Citations"] = "NONE"
+    return sections
+
+
+def _build_cli_qa_record(question: str, answer_text: str) -> dict[str, str]:
+    sections = _extract_cli_answer_sections(answer_text)
+    cleaned_question = _clean_extracted_question_text(question or "")
+    return {
+        "question": cleaned_question,
+        "answer": sections["Answer"],
+        "rationale": sections["Rationale"],
+        "citations": sections["Citations"],
+    }
+
+
+def _print_cli_qa(question: str, answer_text: str) -> dict[str, str]:
+    record = _build_cli_qa_record(question, answer_text)
+    cleaned_question = record["question"]
+    answer = record["answer"]
+    rationale = record["rationale"]
+    citations = record["citations"]
+    print(f"Question: {cleaned_question}\n")
+    print(f"Answer: {answer}\n")
+    print(f"Rationale: {rationale}\n")
+    print(f"Citations: {citations}\n")
+    return record
 
 
 def _call_remote_cag(
@@ -354,24 +702,52 @@ def _call_remote_cag(
     platform: str | None = None,
     model: str | None = None,
     ollama_target: str | None = None,
+    profile_id: str | None = None,
 ) -> dict:
     url = _validate_remote_http_url(url, field_name="remote_cag_url")
     payload = {"question": question}
-    payload.update(_build_runtime_payload(platform, model, ollama_target))
-    headers = {}
-    remote_api_token = (os.getenv("REMOTE_API_TOKEN") or "").strip()
-    if remote_api_token:
-        headers["X-API-Key"] = remote_api_token
+    payload.update(_build_runtime_payload(platform, model, ollama_target, profile_id))
     resp = requests.post(
         url,
         json=payload,
-        headers=headers or None,
+        headers=_build_remote_headers() or None,
         timeout=60,
         allow_redirects=False,
     )
     resp.raise_for_status()
-    data = resp.json()
+    data = _parse_remote_json_response(resp, url)
     return data
+
+
+def _parse_remote_json_response(resp: requests.Response, url: str) -> dict:
+    """Parse remote JSON responses with actionable diagnostics on failure."""
+    content_type = (resp.headers.get("Content-Type") or "").lower()
+    text = (resp.text or "").strip()
+    try:
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        snippet = text[:300].replace("\n", " ")
+        raise RuntimeError(
+            "Remote endpoint did not return valid JSON "
+            f"(url={url}, status={resp.status_code}, content_type={content_type or 'unknown'}, "
+            f"body_snippet={snippet!r}, error={exc})"
+        ) from exc
+    if not isinstance(data, dict):
+        snippet = text[:300].replace("\n", " ")
+        raise RuntimeError(
+            "Remote endpoint returned JSON but not an object "
+            f"(url={url}, status={resp.status_code}, content_type={content_type or 'unknown'}, "
+            f"body_snippet={snippet!r})"
+        )
+    return data
+
+
+def _build_remote_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    remote_api_token = (os.getenv("REMOTE_API_TOKEN") or "").strip()
+    if remote_api_token:
+        headers["X-API-Key"] = remote_api_token
+    return headers
 
 
 def _validate_remote_http_url(url: str, *, field_name: str) -> str:
@@ -387,20 +763,168 @@ def _validate_remote_http_url(url: str, *, field_name: str) -> str:
     return normalized
 
 
-def run_capture_once(
+def _print_ascii_qr(data: str) -> bool:
+    try:
+        import qrcode
+    except Exception:
+        return False
+    try:
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(data)
+        qr.make(fit=True)
+        matrix = qr.get_matrix()
+        print("Session QR (scan with phone):")
+        for row in matrix:
+            line = "".join("██" if cell else "  " for cell in row)
+            print(line)
+        print("")
+        return True
+    except Exception:
+        return False
+
+
+def _write_qr_png(data: str, output_path: Path) -> Path | None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import qrcode
+
+        img = qrcode.make(data)
+        img.save(output_path)
+        return output_path
+    except Exception:
+        pass
+
+    # Fallback to qrencode CLI if available.
+    qrencode = shutil.which("qrencode")
+    if not qrencode:
+        return None
+    try:
+        result = subprocess.run(
+            [qrencode, "-o", str(output_path), data],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and output_path.exists():
+            return output_path
+    except Exception:
+        return None
+    return None
+
+
+def _capture_session_start_url(remote_image_url: str) -> str:
+    remote_image_url = _validate_remote_http_url(
+        remote_image_url,
+        field_name="remote_image_url",
+    )
+    parsed = urlparse(remote_image_url)
+    if not parsed.scheme or not parsed.netloc:
+        raise RuntimeError(f"Invalid remote image URL: {remote_image_url}")
+    return f"{parsed.scheme}://{parsed.netloc}/capture-session/start"
+
+
+def _create_remote_capture_session(
+    remote_image_url: str,
+    *,
+    ttl_minutes: int | None = None,
+) -> dict:
+    payload: dict[str, int] = {}
+    if ttl_minutes is not None:
+        payload["ttl_minutes"] = int(ttl_minutes)
+    start_url = _capture_session_start_url(remote_image_url)
+    resp = requests.post(
+        start_url,
+        json=payload or None,
+        headers=_build_remote_headers() or None,
+        timeout=30,
+        allow_redirects=False,
+    )
+    resp.raise_for_status()
+    data = _parse_remote_json_response(resp, start_url)
+    if not data.get("ok"):
+        raise RuntimeError(str(data.get("error") or "Failed to create remote capture session"))
+    required = ("session_id", "access_code", "access_url")
+    missing = [k for k in required if not str(data.get(k) or "").strip()]
+    if missing:
+        raise RuntimeError(f"Remote capture session response missing fields: {', '.join(missing)}")
+    return data
+
+
+def _write_qr_popup_page(
+    *,
+    page_url: str,
+    access_code: str,
+    session_id: str,
+    expires_at: str | None,
+    output_dir: Path,
+) -> tuple[Path | None, Path | None]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    qr_png = output_dir / f"capture_session_{session_id}_qr.png"
+    qr_written = _write_qr_png(page_url, qr_png)
+    qr_src = qr_png.name if qr_written else ""
+
+    html_path = output_dir / f"capture_session_{session_id}_qr.html"
+    html = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Capture Session QR</title>
+    <style>
+      body {{
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #061229;
+        color: #e6eeff;
+      }}
+      .wrap {{ max-width: 680px; margin: 0 auto; padding: 20px; }}
+      .card {{
+        border: 1px solid #2b4778;
+        border-radius: 14px;
+        background: #0d1b33;
+        padding: 16px;
+      }}
+      .row {{ margin: 10px 0; }}
+      .label {{ font-weight: 700; color: #cfe0ff; margin-bottom: 4px; }}
+      .value {{ word-break: break-all; white-space: pre-wrap; }}
+      img {{
+        display: block;
+        width: min(92vw, 420px);
+        height: auto;
+        background: #fff;
+        border-radius: 10px;
+        padding: 12px;
+        margin: 8px auto;
+      }}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="row"><div class="label">Session ID</div><div class="value">{session_id}</div></div>
+        <div class="row"><div class="label">Access Code (enter on phone)</div><div class="value">{access_code}</div></div>
+        <div class="row"><div class="label">VPS Session URL</div><div class="value">{page_url}</div></div>
+        <div class="row"><div class="label">Expires At (UTC)</div><div class="value">{expires_at or "N/A"}</div></div>
+        {f'<img src="{qr_src}" alt="Session QR" />' if qr_src else '<div class="row"><div class="value">QR PNG unavailable.</div></div>'}
+      </div>
+    </div>
+  </body>
+</html>
+"""
+    html_path.write_text(html, encoding="utf-8")
+    return qr_written, html_path
+
+
+def _answer_from_image_path(
+    img_path: Path,
     mode: str = "local",
     remote_cag_url: str | None = None,
     remote_mcp_url: str | None = None,
     remote_image_url: str | None = None,
-    monitor_index: int | None = None,
-    top_offset: int | None = None,
-    bottom_offset: int | None = None,
-    left_offset: int | None = None,
-    right_offset: int | None = None,
-    region: dict[str, int] | None = None,
+    capture_session_id: str | None = None,
     platform: str | None = None,
     model: str | None = None,
     ollama_target: str | None = None,
+    profile_id: str | None = None,
 ) -> dict:
     """
     One-shot capture + OCR + retrieval + reasoning.
@@ -415,15 +939,6 @@ def run_capture_once(
         "screenshot_path": str
       }
     """
-    img_path = capture_monitor(
-        monitor_index or TARGET_MONITOR,
-        top_offset=top_offset,
-        bottom_offset=bottom_offset,
-        left_offset=left_offset,
-        right_offset=right_offset,
-        region=region,
-    )
-
     q_text = extract_question_with_docling(img_path)
     if not q_text:
         return {
@@ -443,22 +958,20 @@ def run_capture_once(
                 remote_image_url,
                 field_name="remote_image_url",
             )
-            runtime_payload = _build_runtime_payload(platform, model, ollama_target)
+            runtime_payload = _build_runtime_payload(platform, model, ollama_target, profile_id)
+            if capture_session_id:
+                runtime_payload["capture_session_id"] = capture_session_id
             with open(img_path, "rb") as f:
-                headers = {}
-                remote_api_token = (os.getenv("REMOTE_API_TOKEN") or "").strip()
-                if remote_api_token:
-                    headers["X-API-Key"] = remote_api_token
                 resp = requests.post(
                     remote_image_url,
                     files={"image": f},
                     data=runtime_payload or None,
-                    headers=headers or None,
+                    headers=_build_remote_headers() or None,
                     timeout=120,
                     allow_redirects=False,
                 )
             resp.raise_for_status()
-            data = resp.json()
+            data = _parse_remote_json_response(resp, remote_image_url)
             return {
                 "ok": bool(data.get("ok", True)),
                 "question": data.get("question", q_text),
@@ -481,12 +994,17 @@ def run_capture_once(
 
     if mode_normalized == "remote" and remote_cag_url:
         try:
+            remote_cag_url = _validate_remote_http_url(
+                remote_cag_url,
+                field_name="remote_cag_url",
+            )
             remote = _call_remote_cag(
                 q_text,
                 remote_cag_url,
                 platform=platform,
                 model=model,
                 ollama_target=ollama_target,
+                profile_id=profile_id,
             )
             return {
                 "ok": bool(remote.get("ok", True)),
@@ -512,10 +1030,19 @@ def run_capture_once(
     global local_cag_agent
     if local_cag_agent is None:
         local_cag_agent = CAGAgent()
-    context = local_cag_agent.enhanced_retrieve_context(q_text, top_k=12)
+    context = local_cag_agent.enhanced_retrieve_context(
+        q_text, top_k=12, profile_id=profile_id
+    )
     used_ids: list[str] = []
     snippet = context[:500] + ("…" if len(context) > 500 else "")
-    ans_block = reason_answer(q_text, context, used_ids)
+    ans_block = reason_answer(
+        q_text,
+        context,
+        used_ids,
+        platform=platform,
+        model=model,
+        ollama_target=ollama_target,
+    )
 
     remote_result = None
     if remote_mcp_url:
@@ -535,11 +1062,76 @@ def run_capture_once(
     }
 
 
+def run_capture_once(
+    mode: str = "local",
+    remote_cag_url: str | None = None,
+    remote_mcp_url: str | None = None,
+    remote_image_url: str | None = None,
+    monitor_index: int | None = None,
+    top_offset: int | None = None,
+    bottom_offset: int | None = None,
+    left_offset: int | None = None,
+    right_offset: int | None = None,
+    region: dict[str, int] | None = None,
+    platform: str | None = None,
+    model: str | None = None,
+    ollama_target: str | None = None,
+    profile_id: str | None = None,
+) -> dict:
+    img_path = capture_monitor(
+        monitor_index or TARGET_MONITOR,
+        top_offset=top_offset,
+        bottom_offset=bottom_offset,
+        left_offset=left_offset,
+        right_offset=right_offset,
+        region=region,
+    )
+    return _answer_from_image_path(
+        img_path=img_path,
+        mode=mode,
+        remote_cag_url=remote_cag_url,
+        remote_mcp_url=remote_mcp_url,
+        remote_image_url=remote_image_url,
+        platform=platform,
+        model=model,
+        ollama_target=ollama_target,
+        profile_id=profile_id,
+    )
+
+
+def run_image_once(
+    image_path: str | Path,
+    mode: str = "local",
+    remote_cag_url: str | None = None,
+    remote_mcp_url: str | None = None,
+    remote_image_url: str | None = None,
+    platform: str | None = None,
+    model: str | None = None,
+    ollama_target: str | None = None,
+    profile_id: str | None = None,
+) -> dict:
+    img_path = Path(image_path).expanduser().resolve()
+    if not img_path.exists():
+        raise FileNotFoundError(f"Image not found: {img_path}")
+    return _answer_from_image_path(
+        img_path=img_path,
+        mode=mode,
+        remote_cag_url=remote_cag_url,
+        remote_mcp_url=remote_mcp_url,
+        remote_image_url=remote_image_url,
+        platform=platform,
+        model=model,
+        ollama_target=ollama_target,
+        profile_id=profile_id,
+    )
+
+
 # ---------------- INTERACTIVE LOOP (CLI use) ----------------
 REMOTE_MCP_URL = os.getenv("REMOTE_MCP_URL")
 REMOTE_MODE = (os.getenv("REMOTE_MODE") or "local").lower()
 REMOTE_CAG_URL = os.getenv("REMOTE_CAG_URL")
 REMOTE_IMAGE_URL = os.getenv("REMOTE_IMAGE_URL")
+REMOTE_PROFILE_ID = (os.getenv("STUDY_AGENTS_PROFILE_ID") or os.getenv("PROFILE_ID") or "").strip() or None
 
 
 def main_loop(
@@ -553,26 +1145,65 @@ def main_loop(
     platform: str | None = None,
     model: str | None = None,
     ollama_target: str | None = None,
+    profile_id: str | None = REMOTE_PROFILE_ID,
+    session_web: bool = True,
+    session_web_open: bool = True,
+    session_web_ttl_minutes: int | None = None,
+    session_web_qr: bool = True,
+    session_web_qr_ascii: bool = False,
 ):
     effective_mode = (mode or REMOTE_MODE or "local").lower()
     effective_remote_cag = remote_cag_url or REMOTE_CAG_URL
     effective_remote_image = REMOTE_IMAGE_URL
-    if effective_mode == "remote" and effective_remote_cag:
-        effective_remote_cag = _validate_remote_http_url(
-            effective_remote_cag,
-            field_name="remote_cag_url",
-        )
-    if effective_mode == "remote_image" and effective_remote_image:
-        effective_remote_image = _validate_remote_http_url(
-            effective_remote_image,
-            field_name="remote_image_url",
-        )
 
     if keyboard is None:
         raise RuntimeError(
             "Interactive capture loop requires the 'keyboard' package. "
             "Install optional extras with `pip install study-agents[vision]`."
         )
+
+    remote_capture_session_id: str | None = None
+    if effective_mode == "remote_image" and session_web:
+        if not effective_remote_image:
+            print("⚠️ Session web mode requested, but REMOTE_IMAGE_URL is not configured.")
+        else:
+            try:
+                created = _create_remote_capture_session(
+                    effective_remote_image,
+                    ttl_minutes=session_web_ttl_minutes,
+                )
+                remote_capture_session_id = str(created.get("session_id") or "").strip()
+                session_url = str(created.get("access_url") or "").strip()
+                access_code = str(created.get("access_code") or "").strip()
+                expires_at = str(created.get("expires_at") or "").strip()
+                if remote_capture_session_id and session_url and access_code:
+                    print(f"Session report URL (VPS): {session_url}")
+                    print(f"Session access code: {access_code}")
+                    if expires_at:
+                        print(f"Session expires (UTC): {expires_at}")
+                    if session_web_qr:
+                        qr_png, qr_html = _write_qr_popup_page(
+                            page_url=session_url,
+                            access_code=access_code,
+                            session_id=remote_capture_session_id,
+                            expires_at=expires_at,
+                            output_dir=SCREENSHOT_DIR / "capture_sessions",
+                        )
+                        if qr_png:
+                            print(f"Session QR PNG: {qr_png}")
+                        else:
+                            print("Session QR PNG: unavailable (install `qrcode[pil]` for automatic QR generation).")
+                        if qr_html:
+                            print(f"Session QR page: {qr_html}")
+                            if session_web_open:
+                                with contextlib.suppress(Exception):
+                                    webbrowser.open(qr_html.resolve().as_uri())
+                        if session_web_qr_ascii:
+                            _print_ascii_qr(session_url)
+                else:
+                    print("⚠️ Remote session creation returned incomplete data; continuing without session page.")
+            except Exception as exc:
+                print(f"⚠️ Remote session setup failed: {exc}")
 
     print("📄 Docling Capture Agent active...")
     print("Press 'Z' to capture and process current monitor. Press 'Esc' to exit.")
@@ -598,32 +1229,24 @@ def main_loop(
 
             if effective_mode == "remote_image" and effective_remote_image:
                 try:
-                    runtime_payload = _build_runtime_payload(platform, model, ollama_target)
+                    runtime_payload = _build_runtime_payload(
+                        platform, model, ollama_target, profile_id
+                    )
+                    if remote_capture_session_id:
+                        runtime_payload["capture_session_id"] = remote_capture_session_id
                     with open(img_path, "rb") as f:
-                        headers = {}
-                        remote_api_token = (os.getenv("REMOTE_API_TOKEN") or "").strip()
-                        if remote_api_token:
-                            headers["X-API-Key"] = remote_api_token
                         resp = requests.post(
                             effective_remote_image,
                             files={"image": f},
                             data=runtime_payload or None,
-                            headers=headers or None,
+                            headers=_build_remote_headers() or None,
                             timeout=120,
                             allow_redirects=False,
                         )
                     resp.raise_for_status()
-                    data = resp.json()
+                    data = _parse_remote_json_response(resp, effective_remote_image)
                     remote_question = (data.get("question") or "").strip()
-                    if remote_question:
-                        preview = remote_question[:700] + ("..." if len(remote_question) > 700 else "")
-                        print(f"❓ Remote OCR extracted:\n{preview}\n")
-                    if data.get("context_length") is not None:
-                        print(f"📚 Remote context length: {data.get('context_length')}")
-                    remote_snippet = (data.get("context_snippet") or "").strip()
-                    if remote_snippet:
-                        print(f"🧩 Remote context sample:\n{remote_snippet[:500]}\n")
-                    print(f"💡 {data.get('answer', '')}\n")
+                    _print_cli_qa(remote_question, data.get("answer", ""))
                 except Exception as exc:
                     print(f"⚠️ Remote image CAG call failed: {exc}\n")
                 time.sleep(0.6)
@@ -641,8 +1264,6 @@ def main_loop(
                 continue
             seen.add(q_text)
 
-            print(f"\n❓ Extracted:\n{q_text}\n")
-
             if effective_mode == "remote" and effective_remote_cag:
                 try:
                     remote = _call_remote_cag(
@@ -651,8 +1272,9 @@ def main_loop(
                         platform=platform,
                         model=model,
                         ollama_target=ollama_target,
+                        profile_id=profile_id,
                     )
-                    print(f"💡 {remote.get('answer', '')}\n")
+                    _print_cli_qa(remote.get("question", q_text), remote.get("answer", ""))
                 except Exception as exc:
                     print(f"⚠️ Remote CAG call failed: {exc}\n")
             else:
@@ -660,24 +1282,20 @@ def main_loop(
                 global local_cag_agent
                 if local_cag_agent is None:
                     local_cag_agent = CAGAgent()
-                context = local_cag_agent.enhanced_retrieve_context(q_text, top_k=12)
+                context = local_cag_agent.enhanced_retrieve_context(
+                    q_text, top_k=12, profile_id=profile_id
+                )
                 used_ids: list[str] = []
 
-                if context:
-                    snippet = context[:500] + ("…" if len(context) > 500 else "")
-                    print("\n🧩 Enhanced context sample:\n", snippet, "\n")
-                else:
-                    print("→ No context from enhanced CAG retrieval.")
-
-                ans_block = reason_answer(q_text, context, used_ids)
-                print(f"💡 {ans_block}\n")
-
-                if remote_mcp_url:
-                    try:
-                        remote_answer = _call_remote_inspect_graph(q_text, remote_mcp_url)
-                        print(f"🌐 Remote MCP result:\n{remote_answer}\n")
-                    except Exception as exc:
-                        print(f"⚠️ Remote MCP call failed: {exc}\n")
+                ans_block = reason_answer(
+                    q_text,
+                    context,
+                    used_ids,
+                    platform=platform,
+                    model=model,
+                    ollama_target=ollama_target,
+                )
+                _print_cli_qa(q_text, ans_block)
 
             time.sleep(0.6)
         time.sleep(0.05)
@@ -726,6 +1344,11 @@ if __name__ == "__main__":
         help="When platform=ollama, choose local or cloud routing on remote backend.",
     )
     parser.add_argument(
+        "--profile-id",
+        default=REMOTE_PROFILE_ID,
+        help="Optional profile namespace to scope retrieval (sent to remote backend).",
+    )
+    parser.add_argument(
         "--dpi",
         type=float,
         default=96.0,
@@ -735,6 +1358,32 @@ if __name__ == "__main__":
     parser.add_argument("--bottom-in", type=float, default=None, help="Bottom margin in inches.")
     parser.add_argument("--left-in", type=float, default=None, help="Left margin in inches.")
     parser.add_argument("--right-in", type=float, default=None, help="Right margin in inches.")
+    parser.add_argument(
+        "--no-session-web",
+        action="store_true",
+        help="Disable the local secure session web page in remote_image mode.",
+    )
+    parser.add_argument(
+        "--no-session-web-open",
+        action="store_true",
+        help="Do not auto-open the local QR popup page.",
+    )
+    parser.add_argument(
+        "--session-web-ttl-minutes",
+        type=int,
+        default=120,
+        help="Temporary VPS capture session lifetime in minutes (default: 120).",
+    )
+    parser.add_argument(
+        "--no-session-web-qr",
+        action="store_true",
+        help="Disable QR generation for the session URL.",
+    )
+    parser.add_argument(
+        "--session-web-qr-ascii",
+        action="store_true",
+        help="Also print an ASCII QR in the terminal (best effort).",
+    )
 
     args = parser.parse_args()
 
@@ -761,4 +1410,10 @@ if __name__ == "__main__":
         platform=args.platform,
         model=args.model,
         ollama_target=args.ollama_target,
+        profile_id=args.profile_id,
+        session_web=not args.no_session_web,
+        session_web_open=not args.no_session_web_open,
+        session_web_ttl_minutes=args.session_web_ttl_minutes,
+        session_web_qr=not args.no_session_web_qr,
+        session_web_qr_ascii=args.session_web_qr_ascii,
     )

@@ -6,6 +6,8 @@ Uses Graphiti MCP for knowledge graph operations and integrates with Supabase.
 """
 
 import argparse
+import contextlib
+import io
 import json
 import logging
 import os
@@ -36,7 +38,8 @@ from .config import (
 )
 from .supabase_client import create_supabase_client
 from .rag_builder_core import chunk_text, split_into_paragraphs, guess_headings, slugify
-from .prompt_loader import load_prompt
+from .openai_compat import create_chat_completion
+from .prompt_loader import load_required_prompt
 from .kg_pipeline import (
     HybridRetrievalResult,
     HybridRetrievalService,
@@ -45,38 +48,18 @@ from .kg_pipeline import (
     EpisodePayload,
     KnowledgeIngestionService,
 )
+from .profile_namespace import compose_group_id, normalize_profile_id, safe_doc_slug
 from .settings import get_settings, SettingsError
 
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_ENTITY_PROMPT = """You are an entity extraction expert. Extract key entities from the text.
-Return entities in this JSON format:
-{
-  "entities": [
-    {"name": "Entity Name", "type": "person/concept/place", "description": "Brief description"}
-  ]
-}"""
-
-_DEFAULT_RELATION_PROMPT = """You are a relationship extraction expert. Analyze the provided entities and context to find relationships.
-Return relationships in this JSON format:
-{
-  "relationships": [
-    {"source": "Entity1", "target": "Entity2", "relationship": "influences", "confidence": 0.8}
-  ]
-}"""
-
-_DEFAULT_ANSWER_PROMPT = """You are a subject-matter-expert assistant guiding a practitioner.
-Use the provided context (documents + graph) to deliver analysis, workflow steps, and documentation reminders.
-Always speak to the practitioner (use "you" for actions).
-For multiple choice questions, select the best answer (A, B, C, or D) and justify it briefly."""
-
-_DEFAULT_CLUSTER_PROMPT = "Generate a short topic name (2-3 words) for the following text."
-
-ENTITY_PROMPT = load_prompt("cag_entity_extraction.txt", _DEFAULT_ENTITY_PROMPT)
-RELATION_PROMPT = load_prompt("cag_relationship_extraction.txt", _DEFAULT_RELATION_PROMPT)
-ANSWER_PROMPT = load_prompt("cag_answer_generation.txt", _DEFAULT_ANSWER_PROMPT)
-CLUSTER_PROMPT = load_prompt("cag_cluster_topic.txt", _DEFAULT_CLUSTER_PROMPT)
+ENTITY_PROMPT = load_required_prompt("cag_entity_extraction.txt")
+RELATION_PROMPT = load_required_prompt("cag_relationship_extraction.txt")
+ANSWER_PROMPT = load_required_prompt("cag_answer_generation.txt")
+CLUSTER_PROMPT = load_required_prompt("cag_cluster_topic.txt")
+GROUNDED_VERIFIER_PROMPT = load_required_prompt("cag_grounding_verifier_system.txt")
+GROUNDED_REPAIR_PROMPT = load_required_prompt("cag_grounding_repair_system.txt")
 
 
 @dataclass
@@ -122,6 +105,7 @@ class CAGAgent:
     
     MAX_LABEL_LENGTH = 60
     ALLOWED_RELATIONSHIPS = {"contains", "defines", "related_to", "part_of", "influences"}
+    _TRUE_VALUES = {"1", "true", "yes", "on"}
 
     def __init__(
         self,
@@ -183,6 +167,279 @@ class CAGAgent:
             return rel
         return "related_to"
 
+    def _strict_grounded_mode(self) -> bool:
+        return (os.getenv("STRICT_GROUNDED_MODE", "true") or "true").strip().lower() in self._TRUE_VALUES
+
+    def _extract_context_citation_ids(self, context: str) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for match in re.findall(r"\[Document id=([^\]\s]+)", context or ""):
+            cid = match.strip()
+            if cid and cid not in seen:
+                seen.add(cid)
+                ids.append(cid)
+        return ids
+
+    def _parse_citations(self, answer: str) -> list[str]:
+        citation_line = ""
+        for line in (answer or "").splitlines():
+            if line.strip().lower().startswith("citations:"):
+                citation_line = line.split(":", 1)[1].strip()
+                break
+        if not citation_line:
+            return []
+        parts = [p.strip() for p in re.split(r"[,\s]+", citation_line) if p.strip()]
+        return parts
+
+    def _is_abstention(self, answer: str) -> bool:
+        lowered = (answer or "").lower()
+        markers = (
+            "insufficient grounded evidence",
+            "cannot determine from provided context",
+            "unable to determine from provided context",
+            "insufficient context",
+        )
+        return any(marker in lowered for marker in markers)
+
+    def _abstain_response(self, reason: str) -> str:
+        return (
+            "Answer: Insufficient grounded evidence to answer from provided context.\n"
+            f"Rationale: {reason}\n"
+            "Citations: NONE"
+        )
+
+    def _has_required_sections(self, answer: str) -> bool:
+        lowered = (answer or "").lower()
+        return (
+            "answer:" in lowered
+            and "rationale:" in lowered
+            and "citations:" in lowered
+        )
+
+    def _citations_valid(self, answer: str, allowed_ids: set[str]) -> bool:
+        citations = self._parse_citations(answer)
+        if not citations:
+            return False
+        if len(citations) == 1 and citations[0].upper() == "NONE":
+            return self._is_abstention(answer)
+        if not allowed_ids:
+            return False
+        for citation in citations:
+            if citation not in allowed_ids:
+                return False
+        return True
+
+    def _fallback_repair_citations(self, answer: str, allowed_ids: set[str]) -> str:
+        """
+        Deterministically repair/append citations using retrieved document ids.
+
+        This is a last-resort guard for models that answer correctly but emit
+        malformed or missing citation lines.
+        """
+        if not answer:
+            return answer
+        if not allowed_ids:
+            return answer
+
+        chosen = ", ".join(sorted(allowed_ids)[:2])
+        lines = (answer or "").splitlines()
+        rebuilt: list[str] = []
+        has_answer = False
+        has_rationale = False
+        has_citations = False
+
+        in_citations_block = False
+        for raw in lines:
+            line = raw.rstrip()
+            lowered = line.strip().lower()
+            if in_citations_block:
+                if lowered.startswith("answer:") or lowered.startswith("rationale:"):
+                    in_citations_block = False
+                else:
+                    continue
+            if lowered.startswith("answer:"):
+                has_answer = True
+                rebuilt.append(line)
+                continue
+            if lowered.startswith("rationale:"):
+                has_rationale = True
+                rebuilt.append(line)
+                continue
+            if lowered.startswith("citations:"):
+                has_citations = True
+                rebuilt.append(f"Citations: {chosen}")
+                in_citations_block = True
+                continue
+            rebuilt.append(line)
+
+        if not has_answer:
+            summary = " ".join((answer or "").split())
+            rebuilt.insert(0, f"Answer: {summary}")
+        if not has_rationale:
+            rebuilt.append("Rationale: Derived from retrieved context with citation normalization.")
+        if not has_citations:
+            rebuilt.append(f"Citations: {chosen}")
+
+        return "\n".join(rebuilt).strip()
+
+    def _extract_json_object(self, text: str) -> dict[str, Any]:
+        raw = (text or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        match = re.search(r"\{.*\}", raw, flags=re.S)
+        if not match:
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    def _chat_completion_text(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        runtime: Dict[str, Optional[str]],
+        temperature: float = 0.2,
+    ) -> str:
+        platform = runtime.get("platform") or "openai"
+        model = runtime.get("model") or REASON_MODEL
+        if platform == "openai":
+            response = create_chat_completion(
+                self.openai_client,
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+            return (response.choices[0].message.content or "").strip()
+
+        import ollama
+
+        headers: Dict[str, str] = {}
+        api_key = runtime.get("ollama_api_key")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        host = runtime.get("ollama_host")
+        if not host:
+            raise ValueError("Ollama host is not configured.")
+
+        client = ollama.Client(host=host, headers=headers or None)
+        result = client.chat(
+            model=model,
+            messages=messages,
+            options={"temperature": temperature},
+        )
+        if isinstance(result, dict):
+            return (result.get("message", {}) or {}).get("content", "").strip()
+        message = getattr(result, "message", None)
+        if isinstance(message, dict):
+            return (message.get("content") or "").strip()
+        if message is not None and hasattr(message, "get"):
+            return (message.get("content") or "").strip()
+        return ""
+
+    def _grounding_supported(
+        self,
+        *,
+        question: str,
+        context: str,
+        answer: str,
+        runtime: Dict[str, Optional[str]],
+    ) -> tuple[bool, str]:
+        verifier_runtime = self._verifier_runtime(runtime)
+        verifier_messages = [
+            {
+                "role": "system",
+                "content": GROUNDED_VERIFIER_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"QUESTION:\n{question}\n\n"
+                    f"CONTEXT:\n{context[:4000]}\n\n"
+                    f"ANSWER:\n{answer}\n"
+                ),
+            },
+        ]
+        verifier_raw = self._chat_completion_text(
+            messages=verifier_messages,
+            runtime=verifier_runtime,
+            temperature=0.0,
+        )
+        parsed = self._extract_json_object(verifier_raw)
+        supported = bool(parsed.get("supported"))
+        reason = str(parsed.get("reason") or "Unsupported by retrieved context.")
+        unsupported_claims = parsed.get("unsupported_claims") or []
+        if isinstance(unsupported_claims, list) and unsupported_claims:
+            reason = f"{reason} Unsupported claims: {', '.join(str(c) for c in unsupported_claims[:3])}"
+        return supported, reason
+
+    def _repair_grounded_answer_format(
+        self,
+        *,
+        question: str,
+        context: str,
+        draft_answer: str,
+        allowed_ids: set[str],
+        runtime: Dict[str, Optional[str]],
+    ) -> str:
+        repair_runtime = self._verifier_runtime(runtime)
+        allowed = ", ".join(sorted(allowed_ids)) or "NONE"
+        repair_messages = [
+            {
+                "role": "system",
+                "content": GROUNDED_REPAIR_PROMPT.replace("{allowed_ids}", allowed),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"ALLOWED_CITATION_IDS:\n{allowed}\n\n"
+                    f"QUESTION:\n{question}\n\n"
+                    f"CONTEXT:\n{context[:4000]}\n\n"
+                    f"DRAFT_ANSWER:\n{draft_answer}\n"
+                ),
+            },
+        ]
+        return self._chat_completion_text(
+            messages=repair_messages,
+            runtime=repair_runtime,
+            temperature=0.0,
+        )
+
+    def _verifier_runtime(
+        self, generation_runtime: Dict[str, Optional[str]]
+    ) -> Dict[str, Optional[str]]:
+        platform = (
+            os.getenv("STRICT_GROUNDED_VERIFIER_PLATFORM", "openai").strip().lower()
+        )
+        model = (os.getenv("STRICT_GROUNDED_VERIFIER_MODEL", "o3-mini") or "o3-mini").strip()
+        if platform == "openai":
+            return {
+                "platform": "openai",
+                "model": model,
+                "ollama_target": None,
+                "ollama_host": None,
+                "ollama_api_key": None,
+            }
+        if platform == "ollama":
+            resolved = self.resolve_reasoning_runtime(platform="ollama", model=model)
+            return {
+                "platform": "ollama",
+                "model": resolved.get("model"),
+                "ollama_target": resolved.get("ollama_target"),
+                "ollama_host": resolved.get("ollama_host"),
+                "ollama_api_key": resolved.get("ollama_api_key"),
+            }
+        # Fallback: use generation runtime if misconfigured.
+        return generation_runtime
+
     def _build_hierarchy(self, text: str, source: str) -> Tuple[List[KnowledgeNode], List[KnowledgeEdge]]:
         nodes: List[KnowledgeNode] = []
         edges: List[KnowledgeEdge] = []
@@ -236,7 +493,8 @@ class CAGAgent:
             
             user_prompt = f"Extract entities from:\n\n{text[:1000]}"
             
-            response = self.openai_client.chat.completions.create(
+            response = create_chat_completion(
+                self.openai_client,
                 model=REASON_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -281,7 +539,8 @@ class CAGAgent:
             entities_text = "\n".join([f"- {e['name']} ({e['type']})" for e in entities])
             user_prompt = f"""Entities:\n{entities_text}\n\nContext:\n{context[:1000]}\n\nFind relationships between these entities."""
             
-            response = self.openai_client.chat.completions.create(
+            response = create_chat_completion(
+                self.openai_client,
                 model=REASON_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -446,7 +705,8 @@ class CAGAgent:
         Generate a topic name for a cluster using reasoning model.
         """
         try:
-            response = self.openai_client.chat.completions.create(
+            response = create_chat_completion(
+                self.openai_client,
                 model=REASON_MODEL,
                 messages=[
                     {"role": "system", "content": CLUSTER_PROMPT},
@@ -492,10 +752,11 @@ class CAGAgent:
         blocks: List[str] = []
 
         for doc in result.documents:
-            header = "[Document]"
+            doc_id = str(doc.doc_id or "unknown")
+            header = f"[Document id={doc_id}]"
             if doc.similarity is not None:
-                header = f"[Document score={doc.similarity:.3f}]"
-            source = doc.metadata.get("section_id") or doc.metadata.get("tags")
+                header = f"[Document id={doc_id} score={doc.similarity:.3f}]"
+            source = doc.metadata.get("section_id") or doc.metadata.get("tags") or "unknown"
             prefix = f"{header} {source or ''}".strip()
             blocks.append(f"{prefix}\n{doc.content}")
 
@@ -526,6 +787,24 @@ class CAGAgent:
 
         variants: list[str] = [cleaned]
 
+        # MCQ/OCR variant: keep only the stem up to the first question mark.
+        qm_idx = cleaned.find("?")
+        if qm_idx != -1:
+            stem_q = cleaned[: qm_idx + 1].strip()
+            if stem_q and stem_q not in variants:
+                variants.append(stem_q)
+
+        # Strip common hyphen-led Yes/No option trails often produced by OCR.
+        no_hyphen_options = re.sub(
+            r"\s+-\s+(?:yes|no)\b.*?(?=(\s+-\s+(?:yes|no)\b)|$)",
+            " ",
+            cleaned,
+            flags=re.I,
+        )
+        no_hyphen_options = " ".join(no_hyphen_options.split())
+        if no_hyphen_options and no_hyphen_options not in variants:
+            variants.append(no_hyphen_options)
+
         # Remove common option labels and keep only the core stem.
         no_options = re.sub(
             r"\(?[A-Da-d]\s*[\)\.\:]\s+[^()]+?(?=\s+\(?[A-Da-d]\s*[\)\.\:]|\s*$)",
@@ -548,30 +827,85 @@ class CAGAgent:
         query_text: str,
         top_k: int,
         threshold: float,
-    ) -> list[str]:
+        group_prefix: str | None = None,
+        profile_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         query_embedding = self.openai_client.embeddings.create(
             model=self.embedding_model,
             input=query_text,
         ).data[0].embedding
 
-        vector_results = self.supabase.rpc(
-            "match_documents",
-            {
-                "query_embedding": query_embedding,
-                "match_threshold": threshold,
-                "match_count": top_k,
-            },
-        ).execute()
+        base_payload: dict[str, Any] = {
+            "query_embedding": query_embedding,
+            "match_threshold": threshold,
+            "match_count": top_k,
+        }
+        extended_payload: dict[str, Any] = {
+            **base_payload,
+            "group_prefix": group_prefix,
+            "profile_filter": profile_id,
+        }
 
-        return [r.get("content", "") for r in (vector_results.data or []) if r.get("content")]
+        try:
+            vector_results = self.supabase.rpc("match_documents", extended_payload).execute()
+        except Exception as exc:
+            # Backward compatibility for deployments that only have the legacy
+            # 3-arg RPC signature. If a caller requested explicit filters,
+            # keep failing rather than silently dropping filter constraints.
+            if (
+                group_prefix is None
+                and profile_id is None
+                and self._is_match_documents_signature_error(exc)
+            ):
+                vector_results = self.supabase.rpc("match_documents", base_payload).execute()
+            else:
+                raise
 
-    def enhanced_retrieve_context(self, query: str, top_k: int = 5) -> str:
+        results: list[dict[str, Any]] = []
+        for row in (vector_results.data or []):
+            content = (row.get("content") or "").strip()
+            if not content:
+                continue
+            score = row.get("similarity")
+            try:
+                score = float(score) if score is not None else None
+            except Exception:
+                score = None
+            results.append(
+                {
+                    "id": str(row.get("id") or row.get("doc_id") or "unknown"),
+                    "content": content,
+                    "score": score,
+                    "section_id": row.get("meta", {}).get("section_id") if isinstance(row.get("meta"), dict) else None,
+                }
+            )
+        return results
+
+    @staticmethod
+    def _is_match_documents_signature_error(exc: Exception) -> bool:
+        message = str(exc)
+        if "match_documents" not in message:
+            return False
+        return "PGRST203" in message or "PGRST202" in message
+
+    def enhanced_retrieve_context(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        profile_id: str | None = None,
+    ) -> str:
         """
         Enhanced context retrieval combining vector search and knowledge graph traversal.
         """
         if self.use_hybrid_retrieval:
             try:
-                result = self._get_hybrid_retriever().retrieve_context(query, match_count=top_k)
+                filters = {"profile_id": normalize_profile_id(profile_id)} if profile_id else None
+                result = self._get_hybrid_retriever().retrieve_context(
+                    query,
+                    match_count=top_k,
+                    filters=filters,
+                )
                 rendered = self._render_hybrid_result(result)
                 if rendered:
                     return rendered[:4000]
@@ -580,28 +914,43 @@ class CAGAgent:
 
         # Legacy path: vector similarity + ad-hoc KG traversal with retries for OCR/MCQ noise.
         try:
-            vector_context: list[str] = []
+            vector_matches: list[dict[str, Any]] = []
             top_k = max(top_k, 12)
             query_variants = self._query_variants(query)
             thresholds = (0.2, 0.12, 0.08, 0.03, 0.0)
 
             for q in query_variants:
                 for threshold in thresholds:
-                    vector_context = self._vector_search(q, top_k=top_k, threshold=threshold)
-                    if vector_context:
+                    vector_matches = self._vector_search(
+                        q,
+                        top_k=top_k,
+                        threshold=threshold,
+                        profile_id=normalize_profile_id(profile_id) if profile_id else None,
+                    )
+                    if vector_matches:
                         logger.info(
                             "Retrieved %s vector chunks (threshold=%.2f, query_len=%s)",
-                            len(vector_context),
+                            len(vector_matches),
                             threshold,
                             len(q),
                         )
                         break
-                if vector_context:
+                if vector_matches:
                     break
         except Exception as exc:  # noqa: BLE001
             logger.warning("Legacy vector search failed: %s", exc)
-            vector_context = []
-        
+            vector_matches = []
+
+        vector_context: list[str] = []
+        for match in vector_matches:
+            header = f"[Document id={match['id']}"
+            if match.get("score") is not None:
+                header += f" score={match['score']:.3f}"
+            if match.get("section_id"):
+                header += f" section={match['section_id']}"
+            header += "]"
+            vector_context.append(f"{header}\n{match['content']}")
+
         graph_context = self.traverse_knowledge_graph(query)
         all_context = vector_context + graph_context
         
@@ -611,16 +960,23 @@ class CAGAgent:
         combined = "\n\n---\n\n".join(all_context)
         return combined[:4000]  # Limit to 4000 chars
     
-    def _build_episode(self, text: str, source: str) -> EpisodePayload:
+    def _build_episode(
+        self,
+        text: str,
+        source: str,
+        *,
+        profile_id: str | None = None,
+    ) -> EpisodePayload:
         """Normalize text into an EpisodePayload for ingestion."""
         paragraphs = split_into_paragraphs(text)
         chunks = chunk_text(paragraphs, chunk_size=1200, overlap=150)
-        base = slugify(Path(source).stem if source else "cag")
-        episode_id = f"EP:{base}:{uuid.uuid4().hex[:8]}"
-        group_id = base
+        source_slug = safe_doc_slug(Path(source).stem if source else "cag")
+        profile = normalize_profile_id(profile_id) if profile_id else source_slug
+        group_id = compose_group_id(profile, "cag", source_slug)
+        episode_id = f"EP:{group_id}:{uuid.uuid4().hex[:8]}"
         episode_chunks = [
             EpisodeChunk(
-                chunk_id=f"CHUNK:{base}:{idx:03d}",
+                chunk_id=f"{group_id}:{idx:03d}",
                 text=chunk,
                 metadata={"source": source, "order": idx},
             )
@@ -632,22 +988,31 @@ class CAGAgent:
             source_type="text",
             reference_time=datetime.utcnow(),
             group_id=group_id,
+            profile_id=profile,
             tags=["cag"],
             chunks=episode_chunks,
             raw_text=text,
         )
 
-    def process_document_with_cag(self, text: str, source: str = "cag_agent") -> Dict:
+    def process_document_with_cag(
+        self,
+        text: str,
+        source: str = "cag_agent",
+        *,
+        profile_id: str | None = None,
+    ) -> Dict:
         """
         Process document with full CAG pipeline using the unified ingestion path.
         """
         print("[*] Processing with CAG pipeline (Episode → Extraction → Supabase)...")
-        payload = self._build_episode(text, source)
+        payload = self._build_episode(text, source, profile_id=profile_id)
         ingestion = self._get_ingestion_service().ingest_episode(payload)
         return {
             "nodes_stored": ingestion.nodes_written,
             "edges_stored": ingestion.edges_written,
             "documents_stored": ingestion.documents_written,
+            "profile_id": payload.profile_id,
+            "group_id": payload.group_id,
             "warnings": ingestion.warnings,
         }
     
@@ -671,9 +1036,27 @@ class CAGAgent:
         if platform_raw not in {"openai", "ollama"}:
             raise ValueError("Invalid platform. Expected 'openai' or 'ollama'.")
 
-        resolved_model = model_raw or REASON_MODEL
-        if not resolved_model:
-            raise ValueError("No reasoning model configured.")
+        if platform_raw == "ollama":
+            if model_raw:
+                resolved_model = model_raw
+            else:
+                # Prefer an explicit Ollama default before falling back to REASON_MODEL.
+                ollama_default_model = (
+                    os.getenv("OLLAMA_REASON_MODEL")
+                    or os.getenv("OLLAMA_MODEL")
+                    or ""
+                ).strip()
+                if not ollama_default_model and REASON_MODEL and ":" in REASON_MODEL:
+                    ollama_default_model = REASON_MODEL
+                if not ollama_default_model:
+                    raise ValueError(
+                        "No Ollama model provided. Set the request model or OLLAMA_REASON_MODEL."
+                    )
+                resolved_model = ollama_default_model
+        else:
+            resolved_model = model_raw or REASON_MODEL
+            if not resolved_model:
+                raise ValueError("No reasoning model configured.")
 
         runtime: Dict[str, Optional[str]] = {
             "platform": platform_raw,
@@ -715,6 +1098,7 @@ class CAGAgent:
         platform: Optional[str] = None,
         model: Optional[str] = None,
         ollama_target: Optional[str] = None,
+        profile_id: Optional[str] = None,
     ) -> Tuple[str, str]:
         """
         Answer question using enhanced CAG with knowledge graph traversal.
@@ -722,7 +1106,7 @@ class CAGAgent:
         print("[*] Enhanced CAG processing...")
         
         # Step 1: Enhanced context retrieval
-        context = self.enhanced_retrieve_context(question)
+        context = self.enhanced_retrieve_context(question, profile_id=profile_id)
         print(f"[+] Retrieved {len(context)} chars of enhanced context")
         
         runtime = self.resolve_reasoning_runtime(
@@ -747,8 +1131,22 @@ class CAGAgent:
         Generate answer using enhanced context.
         """
         try:
+            runtime = runtime or self.resolve_reasoning_runtime()
+            strict_mode = self._strict_grounded_mode()
+            allowed_citation_ids = set(self._extract_context_citation_ids(context))
+            if strict_mode and not context.strip():
+                return self._abstain_response(
+                    "No supporting context was retrieved for this question."
+                )
+
             system_prompt = ANSWER_PROMPT
-        
+            if strict_mode:
+                allowed = ", ".join(sorted(allowed_citation_ids)) or "NONE"
+                system_prompt += (
+                    "\n\nStrict citation scope for this request: "
+                    f"{allowed}. Any citation outside this set is invalid."
+                )
+
             user_prompt = f"""Enhanced Context (includes related concepts):
 {context[:4000]}
 
@@ -761,7 +1159,6 @@ Instructions:
 
 Answer:"""
             
-            runtime = runtime or self.resolve_reasoning_runtime()
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -773,41 +1170,65 @@ Answer:"""
                 f"ollama_target={runtime.get('ollama_target') or '-'}"
             )
 
-            if platform == "openai":
-                response = self.openai_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=0.2,
-                )
-                return response.choices[0].message.content.strip()
-
-            import ollama
-
-            headers: Dict[str, str] = {}
-            api_key = runtime.get("ollama_api_key")
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-            host = runtime.get("ollama_host")
-            if not host:
-                raise ValueError("Ollama host is not configured.")
-
-            client = ollama.Client(host=host, headers=headers or None)
-            result = client.chat(
-                model=model,
+            answer = self._chat_completion_text(
                 messages=messages,
-                options={"temperature": 0.2},
+                runtime=runtime,
+                temperature=0.2,
             )
 
-            if isinstance(result, dict):
-                return (result.get("message", {}) or {}).get("content", "").strip()
-
-            message = getattr(result, "message", None)
-            if isinstance(message, dict):
-                return (message.get("content") or "").strip()
-            if message is not None and hasattr(message, "get"):
-                return (message.get("content") or "").strip()
-            return ""
-            
+            if strict_mode:
+                repaired_once = False
+                if not self._has_required_sections(answer):
+                    try:
+                        answer = self._repair_grounded_answer_format(
+                            question=question,
+                            context=context,
+                            draft_answer=answer,
+                            allowed_ids=allowed_citation_ids,
+                            runtime=runtime,
+                        )
+                        repaired_once = True
+                    except Exception:
+                        pass
+                if not self._has_required_sections(answer):
+                    return self._abstain_response(
+                        "Model output did not meet required grounded format."
+                    )
+                if not self._citations_valid(answer, allowed_citation_ids):
+                    if not repaired_once:
+                        try:
+                            answer = self._repair_grounded_answer_format(
+                                question=question,
+                                context=context,
+                                draft_answer=answer,
+                                allowed_ids=allowed_citation_ids,
+                                runtime=runtime,
+                            )
+                        except Exception:
+                            pass
+                    if not self._citations_valid(answer, allowed_citation_ids):
+                        answer = self._fallback_repair_citations(
+                            answer,
+                            allowed_citation_ids,
+                        )
+                    if not self._citations_valid(answer, allowed_citation_ids):
+                        return self._abstain_response(
+                            "Model output had missing/invalid citations for retrieved evidence."
+                        )
+                try:
+                    supported, reason = self._grounding_supported(
+                        question=question,
+                        context=context,
+                        answer=answer,
+                        runtime=runtime,
+                    )
+                except Exception as exc:
+                    return self._abstain_response(
+                        f"Grounding verification failed: {exc}"
+                    )
+                if not supported:
+                    return self._abstain_response(reason)
+            return answer
         except Exception as e:
             print(f"[!] Enhanced answer generation failed: {e}")
             return f"Error: Unable to generate answer. ({e})"
@@ -836,6 +1257,43 @@ def extract_text_from_file(file_path: str) -> str:
             # Try with different encoding
             with open(file_path, 'r', encoding='latin-1') as f:
                 return f.read()
+
+
+def _extract_cli_answer_sections(answer_text: str) -> Dict[str, str]:
+    """Normalize answer text into Question/Answer/Rationale/Citations sections."""
+    sections = {"Answer": "", "Rationale": "", "Citations": ""}
+    current: Optional[str] = None
+
+    for raw_line in (answer_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("answer:"):
+            current = "Answer"
+            sections[current] = line.split(":", 1)[1].strip()
+            continue
+        if lowered.startswith("rationale:"):
+            current = "Rationale"
+            sections[current] = line.split(":", 1)[1].strip()
+            continue
+        if lowered.startswith("citations:"):
+            current = "Citations"
+            sections[current] = line.split(":", 1)[1].strip()
+            continue
+        if current:
+            sections[current] = f"{sections[current]} {line}".strip()
+
+    # Fallback for non-structured model output.
+    if not any(sections.values()):
+        sections["Answer"] = (answer_text or "").strip()
+
+    if not sections["Rationale"]:
+        sections["Rationale"] = "N/A"
+    if not sections["Citations"]:
+        sections["Citations"] = "NONE"
+
+    return sections
 
 
 def main():
@@ -870,6 +1328,10 @@ def main():
         action="store_true",
         help="Answer question using enhanced CAG"
     )
+    parser.add_argument(
+        "--profile",
+        help="Knowledge profile namespace to use for ingestion/retrieval.",
+    )
     
     args = parser.parse_args()
     
@@ -884,13 +1346,17 @@ def main():
             text = extract_text_from_file(args.text_file)
             print(f"[*] Extracted {len(text)} characters from {os.path.basename(args.text_file)}")
             
-            result = cag.process_document_with_cag(text)
+            result = cag.process_document_with_cag(
+                text,
+                source=args.text_file,
+                profile_id=args.profile,
+            )
             print(f"\n[*] CAG Processing Complete:")
-            print(f"   Entities: {result['entities']}")
-            print(f"   Relationships: {result['relationships']}")
             print(f"   Nodes Stored: {result['nodes_stored']}")
             print(f"   Edges Stored: {result['edges_stored']}")
-            print(f"   Clusters: {result['clusters']}")
+            print(f"   Documents Stored: {result['documents_stored']}")
+            print(f"   Profile: {result.get('profile_id')}")
+            print(f"   Group: {result.get('group_id')}")
             
         except FileNotFoundError:
             print(f"[!] File not found: {args.text_file}")
@@ -903,9 +1369,14 @@ def main():
             question = args.question
         else:
             question = input("Enter your question: ")
-        context, answer = cag.answer_with_enhanced_cag(question)
-        print(f"\n[*] Enhanced Context:\n{context[:1000]}{'...' if len(context) > 1000 else ''}\n")
-        print(f"[*] Answer:\n{answer}\n")
+        # Suppress internal diagnostic prints for clean CLI output.
+        with contextlib.redirect_stdout(io.StringIO()):
+            _, answer = cag.answer_with_enhanced_cag(question, profile_id=args.profile)
+        sections = _extract_cli_answer_sections(answer)
+        print(f"Question: {question}\n")
+        print(f"Answer: {sections['Answer']}\n")
+        print(f"Rationale: {sections['Rationale']}\n")
+        print(f"Citations: {sections['Citations']}")
     
     else:
         print("[*] CAG Agent - Context-Aware Grouping with Knowledge Graphs")

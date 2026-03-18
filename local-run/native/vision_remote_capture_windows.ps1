@@ -191,8 +191,8 @@ function Invoke-RemoteCapture([string]$imagePath) {
     $client = New-Object System.Net.Http.HttpClient
     $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, $RemoteImageUrl)
     $multipart = New-Object System.Net.Http.MultipartFormDataContent
-    $bytes = [System.IO.File]::ReadAllBytes($imagePath)
-    $imageContent = New-Object System.Net.Http.ByteArrayContent($bytes)
+    $bytes = [byte[]][System.IO.File]::ReadAllBytes($imagePath)
+    $imageContent = New-Object System.Net.Http.ByteArrayContent -ArgumentList (,$bytes)
     $imageContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("image/png")
     $multipart.Add($imageContent, "image", [System.IO.Path]::GetFileName($imagePath))
 

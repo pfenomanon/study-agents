@@ -290,7 +290,7 @@ do {
     if (-not $Loop) {
         break
     }
-    $next = Read-Host ""
+    $next = Read-Host "Press Enter to capture again, or type q to quit"
     if ($next -match "^(q|quit|exit)$") {
         break
     }

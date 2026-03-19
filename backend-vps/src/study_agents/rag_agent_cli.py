@@ -16,6 +16,12 @@ from urllib.request import urlretrieve
 from dataclasses import asdict
 
 from .kg_pipeline import KnowledgeIngestionService, episode_from_rag_artifacts
+from .profile_namespace import (
+    build_profile_output_dir,
+    compose_group_id,
+    normalize_profile_id,
+    safe_doc_slug,
+)
 from .rag_builder_core import ensure_dir
 from .rag_reasoning import RAGBuildAgent, RAGReasoningPlanner
 
@@ -82,6 +88,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--reason-model", default=None, help="Override reasoning model name")
     parser.add_argument("--push", action="store_true", help="Push artifacts into Supabase")
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Knowledge profile namespace used for output paths and ingestion IDs.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON summary (stdout)")
     return parser
 
@@ -96,7 +107,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("No valid PDF inputs provided.", file=sys.stderr)
         return 1
 
-    outdir = ensure_dir(Path(args.outdir).expanduser().resolve())
+    outdir_root = ensure_dir(Path(args.outdir).expanduser().resolve())
+    profile_id = normalize_profile_id(args.profile) if args.profile else None
+    outdir = (
+        ensure_dir(build_profile_output_dir(outdir_root, profile_id, "rag_build"))
+        if profile_id
+        else outdir_root
+    )
     overrides = {
         key: getattr(args, key.replace("-", "_"))
         for key in ("chunk-size", "overlap", "max-sections", "triples")
@@ -114,7 +131,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                 build = agent.build_bundle(pdf_path=pdf_path, outdir=outdir, overrides=overrides)
                 ingest_result = None
                 if ingestion_service is not None:
-                    payload = episode_from_rag_artifacts(pdf_path, build.artifacts)
+                    group_id = (
+                        compose_group_id(profile_id, "rag_build", safe_doc_slug(pdf_path.stem))
+                        if profile_id
+                        else None
+                    )
+                    payload = episode_from_rag_artifacts(
+                        pdf_path,
+                        build.artifacts,
+                        group_id=group_id,
+                        profile_id=profile_id,
+                    )
                     ingest_result = ingestion_service.ingest_episode(payload)
                 result_payload = {
                     "input": str(pdf_path),

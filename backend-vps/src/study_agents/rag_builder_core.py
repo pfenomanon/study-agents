@@ -33,6 +33,25 @@ def _use_docling_by_default() -> bool:
     # Prefer Docling unless explicitly disabled so extraction matches documented defaults.
     return os.getenv("RAG_USE_DOCLING", "true").lower() in {"1", "true", "yes", "on"}
 
+
+def _should_use_pymupdf_fast_path(pdf_path: Path) -> bool:
+    """
+    Return True when the PDF already contains extractable text and OCR is likely unnecessary.
+    This prevents long OCR-heavy runs for text-native PDFs.
+    """
+    try:
+        doc = fitz.open(str(pdf_path))
+        sample_pages = min(8, doc.page_count)
+        total_chars = 0
+        for i in range(sample_pages):
+            txt = doc.load_page(i).get_text() or ""
+            total_chars += len(txt.strip())
+        doc.close()
+        # If there is enough native text in first pages, prefer fast non-OCR extraction.
+        return total_chars >= 800
+    except Exception:
+        return False
+
 try:  # PyMuPDF
     import fitz
 except ImportError as exc:  # pragma: no cover - surfaced at runtime
@@ -75,6 +94,10 @@ def quote_win(path: Path) -> str:
 
 def read_pdf_text_blocks(pdf_path: Path) -> list[dict]:
     """Read PDF text blocks using Docling with OCR capabilities (same as KB Capture Agent)."""
+    if _should_use_pymupdf_fast_path(pdf_path):
+        logger.info("Using fast PyMuPDF extraction for text-native PDF: %s", pdf_path)
+        return _extract_with_pymupdf(pdf_path)
+
     if not _use_docling_by_default():
         return _extract_with_pymupdf(pdf_path)
 
@@ -147,118 +170,27 @@ def extract_pdf_with_docling(pdf_path: Path) -> str:
 
         try:
             from docling.document_converter import DocumentConverter
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
-            from docling.models.easyocr_model import EasyOcrOptions
-            from docling.models.rapid_ocr_model import RapidOcrOptions
-            from docling.models.tesseract_ocr_model import TesseractOcrOptions
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError(
                 "Docling OCR support requires optional dependencies. "
-                "Install with `pip install study-agents[docling]`."
+                "Install with `pip install study-agents[rag]`."
             ) from exc
-        text = ""
-
-        def _convert(pipeline_options):
-            converter = _silent_run(DocumentConverter)
-            return _silent_run(converter.convert, str(pdf_path))
-
-        # Try EasyOCR backend first (best for English)
         try:
-            logger.info("Configuring Docling with EasyOCR backend...")
-            pipeline_options = PdfPipelineOptions()
-            pipeline_options.do_ocr = True
-            pipeline_options.do_table_structure = True
-            pipeline_options.table_structure_options.do_cell_matching = True
+            converter = _silent_run(DocumentConverter)
+            result = _silent_run(converter.convert, str(pdf_path))
+        except Exception as exc:
+            logger.warning("Docling conversion failed: %s", exc)
+            return ""
 
-            ocr_options = EasyOcrOptions(force_full_page_ocr=True)
-            ocr_options.lang = ["en"]
-            pipeline_options.ocr_options = ocr_options
-
-            result = _convert(pipeline_options)
-
-            if hasattr(result, "document"):
-                doc = result.document
-                text = doc.export_to_markdown()
-                if text == "<!-- image -->":
-                    text = ""
-                elif text.strip():
-                    text = text.replace('<!-- image -->', '').strip()
-
-            if text:
-                logger.info("Docling with EasyOCR backend successful")
-        except Exception as e:
-            logger.warning("Docling EasyOCR backend failed: %s", e)
-
-        if not text:
-            try:
-                logger.info("Trying Docling with Tesseract backend...")
-                pipeline_options = PdfPipelineOptions()
-                pipeline_options.do_ocr = True
-                pipeline_options.do_table_structure = True
-                pipeline_options.table_structure_options.do_cell_matching = True
-
-                ocr_options = TesseractOcrOptions(force_full_page_ocr=True)
-                pipeline_options.ocr_options = ocr_options
-
-                result = _convert(pipeline_options)
-
-                if hasattr(result, "document"):
-                    doc = result.document
-                    text = doc.export_to_markdown()
-                    if text == "<!-- image -->":
-                        text = ""
-                    elif text.strip():
-                        text = text.replace('<!-- image -->', '').strip()
-
-                if text:
-                    logger.info("Docling with Tesseract backend successful")
-            except Exception as e:
-                logger.warning("Docling Tesseract backend failed: %s", e)
-
-        if not text:
-            try:
-                logger.info("Trying Docling with RapidOCR backend...")
-                pipeline_options = PdfPipelineOptions()
-                pipeline_options.do_ocr = True
-                pipeline_options.do_table_structure = True
-                pipeline_options.table_structure_options.do_cell_matching = True
-
-                ocr_options = RapidOcrOptions(force_full_page_ocr=True)
-                pipeline_options.ocr_options = ocr_options
-
-                result = _convert(pipeline_options)
-
-                if hasattr(result, "document"):
-                    doc = result.document
-                    text = doc.export_to_markdown()
-                    if text == "<!-- image -->":
-                        text = ""
-                    elif text.strip():
-                        text = text.replace('<!-- image -->', '').strip()
-
-                if text:
-                    logger.info("Docling with RapidOCR backend successful")
-            except Exception as e:
-                logger.warning("Docling RapidOCR backend failed: %s", e)
-
-        if not text:
-            logger.warning("All Docling backends failed. Trying direct EasyOCR...")
-            try:
-                from easyocr import Reader
-
-                reader = Reader(['en'], gpu=False)
-                result = _silent_run(reader.readtext, str(pdf_path))
-
-                texts = []
-                for (bbox, extracted_text, confidence) in result:
-                    if confidence > 0.5:
-                        texts.append(extracted_text)
-
-                if texts:
-                    text = "\n".join(texts)
-                    logger.info("Direct EasyOCR successful")
-            except Exception as e:
-                logger.warning("Direct EasyOCR failed: %s", e)
+        text = ""
+        try:
+            if hasattr(result, "document") and result.document is not None:
+                exported = result.document.export_to_markdown()
+                if exported and exported.strip():
+                    text = exported.replace("<!-- image -->", "").strip()
+        except Exception as exc:
+            logger.warning("Docling markdown export failed: %s", exc)
+            text = ""
 
         return text
 
@@ -342,11 +274,36 @@ def guess_headings(paragraphs: Sequence[str]) -> list[str]:
 def chunk_text(
     paragraphs: Iterable[str], chunk_size: int = 1200, overlap: int = 150
 ) -> list[str]:
+    chunk_size = max(200, int(chunk_size))
+    overlap = max(0, min(int(overlap), chunk_size - 1))
+
+    normalized: list[str] = []
+    for para in paragraphs:
+        text = (para or "").strip()
+        if not text:
+            continue
+        if len(text) <= chunk_size:
+            normalized.append(text)
+            continue
+
+        # Guard against oversized paragraphs (e.g., OCR output without blank lines)
+        # so a single embedding call never receives an unbounded payload.
+        step = max(1, chunk_size - overlap)
+        start = 0
+        while start < len(text):
+            end = min(len(text), start + chunk_size)
+            piece = text[start:end].strip()
+            if piece:
+                normalized.append(piece)
+            if end >= len(text):
+                break
+            start += step
+
     chunks: list[str] = []
     current: list[str] = []
     current_len = 0
 
-    for para in paragraphs:
+    for para in normalized:
         plen = len(para)
         if current and current_len + plen + 1 > chunk_size:
             chunk = "\n\n".join(current)
@@ -523,7 +480,7 @@ def build_howto_md(
             "emb=cli.embeddings.create(model='text-embedding-3-small',input=q).data[0].embedding;"
             "hits=sb.rpc('match_documents',{'query_embedding':emb,'match_threshold':0.15,'match_count':8})."
             "execute().data or [];ctx='\\n\\n---\\n'.join([h['content'] for h in hits]);"
-            "msg=f\"Answer as a subject-matter expert using ONLY CONTEXT. If missing, say so.\\n\\n"
+            "msg=f\"Answer as a licensed Texas insurance adjuster using ONLY CONTEXT. If missing, say so.\\n\\n"
             "QUESTION:\\n{q}\\n\\nCONTEXT:\\n{ctx[:12000]}\";"
             "ans=cli.chat.completions.create(model='gpt-4o-mini',messages=[{'role':'system','content':'You answer strictly from provided context.'},{'role':'user','content':msg}],temperature=0);"
             "print(ans.choices[0].message.content)\""
@@ -821,6 +778,162 @@ def build_from_pdf(
     }
 
 
+def build_from_markdown(
+    *,
+    markdown_path: Path,
+    outdir: Path,
+    chunk_size: int = 1200,
+    chunk_overlap: int = 150,
+    max_sections: int = 80,
+    triples_budget: int = 300,
+) -> dict:
+    doc_title = markdown_path.stem
+    base_slug = slugify(doc_title)
+    doc_folder = ensure_dir(outdir / base_slug)
+
+    text = markdown_path.read_text(encoding="utf-8")
+    paragraphs = split_into_paragraphs(text)
+    headings = guess_headings(paragraphs)
+    sections = _split_into_sections(paragraphs, headings, doc_title=doc_title)
+    if max_sections and len(sections) > max_sections:
+        sections = sections[:max_sections]
+
+    chunks_out: list[dict] = []
+    nodes_out: list[Node] = []
+    edges_out: list[Edge] = []
+    triples_out: list[dict] = []
+
+    analysis = {
+        "input_markdown": str(markdown_path),
+        "created": now_iso(),
+        "section_count": len(sections),
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "max_sections": max_sections,
+        "triples_budget": triples_budget,
+        "notes": "Markdown source processed with direct chunking.",
+    }
+
+    doc_node_id = f"DOC:{base_slug}"
+    nodes_out.append(
+        Node(id=doc_node_id, type="Document", title=doc_title, attrs={"path": str(markdown_path)})
+    )
+
+    remaining_triples = triples_budget
+    for si, (title, body) in enumerate(sections, start=1):
+        sec_id = f"SEC:{base_slug}:{si:03d}"
+        nodes_out.append(Node(id=sec_id, type="Section", title=title, attrs={"order": si}))
+        edges_out.append(Edge(src=doc_node_id, rel="contains", dst=sec_id, attrs={}))
+
+        sec_paras = split_into_paragraphs(body)
+        sec_chunks = chunk_text(sec_paras, chunk_size=chunk_size, overlap=chunk_overlap)
+        for cj, chunk_text_value in enumerate(sec_chunks, start=1):
+            chunks_out.append(
+                {
+                    "id": f"CHUNK:{base_slug}:{si:03d}:{cj:03d}",
+                    "text": chunk_text_value,
+                    "section_id": sec_id,
+                    "section_title": title,
+                    "chunk_index": cj,
+                    "page_start": None,
+                    "page_end": None,
+                    "tags": [base_slug, "markdown"],
+                }
+            )
+
+        if remaining_triples > 0 and body:
+            lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+            for ln in lines:
+                if remaining_triples <= 0:
+                    break
+                match = re.match(r"^([A-Za-z][\w\s\-/&]+)\s*[:\-–]\s*(.+)$", ln)
+                if match:
+                    key = match.group(1).strip()
+                    val = match.group(2).strip()
+                    subj_id = f"ENT:{base_slug}:{uuid.uuid4().hex[:8]}"
+                    obj_id = f"ENT:{base_slug}:{uuid.uuid4().hex[:8]}"
+                    nodes_out.append(Node(id=subj_id, type="Entity", title=key, attrs={}))
+                    nodes_out.append(Node(id=obj_id, type="Entity", title=val[:80], attrs={}))
+                    edges_out.append(
+                        Edge(src=subj_id, rel="defines", dst=obj_id, attrs={"section": sec_id})
+                    )
+                    triples_out.append(
+                        {"s": subj_id, "p": "defines", "o": obj_id, "section": sec_id, "text": ln}
+                    )
+                    remaining_triples -= 1
+
+    nodes_out = list({node.id: node for node in nodes_out}.values())
+
+    chunks_fp = doc_folder / f"{base_slug}.chunks.jsonl"
+    nodes_fp = doc_folder / f"{base_slug}.nodes.jsonl"
+    edges_fp = doc_folder / f"{base_slug}.edges.jsonl"
+    triples_fp = doc_folder / f"{base_slug}.triples.jsonl"
+    analysis_fp = doc_folder / f"{base_slug}.analysis.json"
+    howto_fp = doc_folder / f"{base_slug}.HOWTO.md"
+    markdown_fp = doc_folder / f"{base_slug}.CAG.md"
+
+    with open(chunks_fp, "w", encoding="utf-8") as f:
+        for chunk in chunks_out:
+            f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+
+    with open(nodes_fp, "w", encoding="utf-8") as f:
+        for node in nodes_out:
+            f.write(
+                json.dumps(
+                    {"id": node.id, "type": node.type, "title": node.title, "attrs": node.attrs},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    with open(edges_fp, "w", encoding="utf-8") as f:
+        for edge in edges_out:
+            f.write(
+                json.dumps({"src": edge.src, "rel": edge.rel, "dst": edge.dst, "attrs": edge.attrs}, ensure_ascii=False)
+                + "\n"
+            )
+
+    with open(triples_fp, "w", encoding="utf-8") as f:
+        for triple in triples_out:
+            f.write(json.dumps(triple, ensure_ascii=False) + "\n")
+
+    with open(analysis_fp, "w", encoding="utf-8") as f:
+        json.dump(analysis, f, indent=2, ensure_ascii=False)
+
+    howto_text = build_howto_md(
+        doc_title_disp=doc_title,
+        ts=now_iso(),
+        doc_folder=doc_folder,
+        base_slug=base_slug,
+        chunks_fp=chunks_fp,
+        nodes_fp=nodes_fp,
+        edges_fp=edges_fp,
+        triples_fp=triples_fp,
+        analysis_fp=analysis_fp,
+    )
+    with open(howto_fp, "w", encoding="utf-8") as f:
+        f.write(howto_text)
+
+    _write_markdown_summary(
+        markdown_fp,
+        doc_title=doc_title,
+        sections=sections,
+        chunks=chunks_out,
+        triples=triples_out,
+    )
+
+    return {
+        "folder": str(doc_folder),
+        "chunks": str(chunks_fp),
+        "nodes": str(nodes_fp),
+        "edges": str(edges_fp),
+        "triples": str(triples_fp),
+        "analysis": str(analysis_fp),
+        "howto": str(howto_fp),
+        "markdown": str(markdown_fp),
+    }
+
+
 def _write_markdown_summary(
     markdown_path: Path,
     *,
@@ -884,4 +997,5 @@ __all__ = [
     "build_howto_md",
     "suggest_params",
     "build_from_pdf",
+    "build_from_markdown",
 ]

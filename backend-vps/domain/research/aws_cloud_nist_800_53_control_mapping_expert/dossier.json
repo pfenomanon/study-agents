@@ -1,0 +1,163 @@
+{
+  "generated_at": "2026-03-16T01:55:37.585960+00:00",
+  "profile_name": "aws_cloud_nist_800_53_control_mapping_expert",
+  "domain": "Expert AWS Cloud Expert with NIST 800-53 control implementation mapping expertise to AWS cloud service",
+  "query_runs": [
+    {
+      "pass": 1,
+      "query": "Expert AWS Cloud Expert with NIST 800-53 control implementation mapping expertise to AWS cloud service official standards regulations workflows terminology glossary best practices",
+      "pass_source_count": 12,
+      "aggregate_metrics": {
+        "source_count": 12,
+        "authoritative_count": 12,
+        "unique_domain_count": 10,
+        "domains": [
+          "bensguide.gpo.gov",
+          "en.wikipedia.org",
+          "purl.org",
+          "schema.org",
+          "www.ecfr.gov",
+          "www.govinfo.gov",
+          "www.gpo.gov",
+          "www.iso.org",
+          "www.iso16363.org",
+          "www.nist.gov"
+        ],
+        "avg_relevance": 0.495
+      },
+      "ready": true,
+      "gaps": []
+    }
+  ],
+  "research_ready": true,
+  "research_gaps": [],
+  "metrics": {
+    "source_count": 12,
+    "authoritative_count": 12,
+    "unique_domain_count": 10,
+    "domains": [
+      "bensguide.gpo.gov",
+      "en.wikipedia.org",
+      "purl.org",
+      "schema.org",
+      "www.ecfr.gov",
+      "www.govinfo.gov",
+      "www.gpo.gov",
+      "www.iso.org",
+      "www.iso16363.org",
+      "www.nist.gov"
+    ],
+    "avg_relevance": 0.495
+  },
+  "sources": [
+    {
+      "source_id": "S12",
+      "url": "http://www.gpo.gov",
+      "domain": "www.gpo.gov",
+      "authority_score": 1.0,
+      "relevance_score": 0.6,
+      "title": "U.S. Government Publishing Office",
+      "snippet": "U.S. Government Publishing Office Javascript must be enabled for the correct page display Who We Are Our Agency Mission, Vision, and Values Awards and Certifications Leadership Organizational Chart History Team Locations Governmental Affairs Publication Distribution Update Form Official Federal Register Subscription Form Inspector General News and Media News and Press Releases Media Kit GPO Style Manual Videos Branding GPO Business Units Coronavirus Resources January 6th Select Committee Report PII Incident Information Requests Careers Open Positions How to Apply Benefits GPO Employee Resources Work With Us Agencies Congressionally Mandated Reports New Customers Contact Your Team Services for Agencies GPO Publish - Place and Manage Orders Online Forms and Standards Billing and Payment G-In"
+    },
+    {
+      "source_id": "S1",
+      "url": "https://www.nist.gov/",
+      "domain": "www.nist.gov",
+      "authority_score": 1.0,
+      "relevance_score": 0.575,
+      "title": "National Institute of Standards and Technology",
+      "snippet": "National Institute of Standards and Technology Skip to main content An official website of the United States government Here\u2019s how you know Here\u2019s how you know Official websites use .gov A .gov website belongs to an official government organization in the United States. Secure .gov websites use HTTPS A lock ( Lock A locked padlock ) or https:// means you\u2019ve safely connected to the .gov website. Share sensitive information only on official, secure websites. https://www.nist.gov/national-institute-standards-and-technology Careers Shop Contact Search NIST Menu Close Publications What We Do All Topics Advanced communications Artificial intelligence Bioscience Buildings and construction Chemistry Cybersecurity and Privacy Electronics Energy Environment Fire Forensic science Health Information t"
+    },
+    {
+      "source_id": "S3",
+      "url": "https://www.govinfo.gov/",
+      "domain": "www.govinfo.gov",
+      "authority_score": 1.0,
+      "relevance_score": 0.575,
+      "title": "GovInfo | U.S. Government Publishing Office",
+      "snippet": "GovInfo | U.S. Government Publishing Office Skip to main content Menu Browse A to Z Category Date Committee Author About About Metrics --> Policies Authentication Digital Preservation History Agency Submission U.S. Government Information FDsys Retirement Developers Developer Hub API Bulk Data Repository Link Service Feeds Sitemaps System Design Features All Features Featured Content News News --> Release Notes Finding Publications Help Help Finding Information What's Available Tutorials and Handouts Other Resources Feedback Submit Feedback Contact Us Discover U.S. Government Information --> --> --> --> --> --> A to Z Browse documents by alphabetical order Category Browse documents in specific collections Date Browse documents within a timeframe or date range Committee Browse documents by t"
+    },
+    {
+      "source_id": "S2",
+      "url": "https://www.iso.org/",
+      "domain": "www.iso.org",
+      "authority_score": 0.8,
+      "relevance_score": 0.535,
+      "title": "ISO - International Organization for Standardization",
+      "snippet": "ISO - International Organization for Standardization Google Consent Mode + Matomo TM --> Skip to main content &nbsp;Applications &nbsp;OBP English espa\u00f1ol fran\u00e7ais \u0440\u0443\u0441\u0441\u043a\u0438\u0439 &nbsp;Menu Standards Sectors Health IT & related technologies Management & services Security, safety & risk Transport Energy Diversity & inclusion Environmental sustainability Food & agriculture Materials Building & construction Engineering About ISO Insights & news Insights All insights Healthcare Artificial intelligence Climate change Transport Cybersecurity Quality management Renewable energy Occupational health and safety News Expert talk Standards world Media kit Resources ISO 22000 explained ISO 9001 explained ISO 14001 explained ISO 42001 explained ISO 45001 explained Taking part Store Search Cart ISO : Global sta"
+    },
+    {
+      "source_id": "S6",
+      "url": "http://purl.org/dc/terms/",
+      "domain": "purl.org",
+      "authority_score": 0.8,
+      "relevance_score": 0.535,
+      "title": "DCMI: DCMI Metadata Terms",
+      "snippet": "DCMI: DCMI Metadata Terms Dublin Core Open menu DCMI-2026 Conference Specifications Events Annual Conferences Continuing an unbroken sequence of more than twenty years of DCMI Annual Conferences. Webinars &amp; Tutorials Occasional webinars and online tutorials orgainized by the DCMI. DCMI 2026 Conference Community DCMI Community DCMI is defined by its community which is responsible for the innovative developments and evolving good practices. DCMI Education Committee The DCMI Education Committee coordinates activities and publications that teach and inform users about current developments and technologies for metadata. LRMI Working Group The LRMI\u2122 Working Group is charged with defining and executing DCMI work on the LRMI family of metadata specifications. Application Profiles Working Group"
+    },
+    {
+      "source_id": "S11",
+      "url": "https://www.ecfr.gov/",
+      "domain": "www.ecfr.gov",
+      "authority_score": 1.0,
+      "relevance_score": 0.5,
+      "title": "Federal Register :: Request Access",
+      "snippet": "Federal Register :: Request Access Request Access Due to aggressive automated scraping of FederalRegister.gov and eCFR.gov, programmatic access to these sites is limited to access to our extensive developer APIs. Please visit FederalRegister.gov API documentation or eCFR.gov API documentation to learn more about how to access the API. Your request has been flagged as potentially automated. If you are human user receiving this message, please complete the CAPTCHA (bot test) below and click \"Request Access\". You may occassionally be asked to complete the CAPTCHA again, this is normal and part of our security measures. unblock#handleSubmit\"> Request Access An official website of the United States government. If you experiencing issues with the CAPTCHA or want to request a wider IP range, you "
+    },
+    {
+      "source_id": "S13",
+      "url": "http://www.iso16363.org/iso-certification/certified-clients",
+      "domain": "www.iso16363.org",
+      "authority_score": 0.8,
+      "relevance_score": 0.485,
+      "title": "Certified clients | PTAB - Primary Trustworthy Digital Repository Authorisation Body Ltd",
+      "snippet": "Certified clients | PTAB - Primary Trustworthy Digital Repository Authorisation Body Ltd Skip to content PTAB &#8211; Primary Trustworthy Digital Repository Authorisation Body Ltd The ISO 16363 site Home Audit &#038; Certification Certified clients ETERNAL RDC-Arq Digital Repository United States Government Publishing Office Overview Application for pre-assessment Preparing for an audit Application form for an ISO 16363 audit Audit and Certification process Certification Mark Impartiality Policy Complaints Procedure for Appeals Audit Costs Training Courses A quiz to test your knowledge of OAIS Training with on-line PTAB lecturer Outline of modules for 2, 4 and 5 day courses Resources Basic training for digital preservation Tools and services Useful groups Background Further reading Registe"
+    },
+    {
+      "source_id": "S9",
+      "url": "http://bensguide.gpo.gov/',",
+      "domain": "bensguide.gpo.gov",
+      "authority_score": 1.0,
+      "relevance_score": 0.475,
+      "title": "Error! Page Not Found !!",
+      "snippet": "Error! Page Not Found !! Home About Ben and GPO Libraries Learning Adventures Glossary Games Search Parents &amp; Educators Citizenship About this site Legal About this site Legal Feedback Search... 4 to 8 badge 9to13 14more We've updated and reorganized! Search &nbsp;Ben\u2019s Guide to the U.S. Government or visit&nbsp; the home page to start your Learning Adventure. Send questions or comments about Ben\u2019s Guide to our Feedback Form . Thank you. Let us know what you think about the new Ben's Guide! Your feedback"
+    },
+    {
+      "source_id": "S10",
+      "url": "http://bensguide.gpo.gov/';",
+      "domain": "bensguide.gpo.gov",
+      "authority_score": 1.0,
+      "relevance_score": 0.475,
+      "title": "Error! Page Not Found !!",
+      "snippet": "Error! Page Not Found !! Home About Ben and GPO Libraries Learning Adventures Glossary Games Search Parents &amp; Educators Citizenship About this site Legal About this site Legal Feedback Search... 4 to 8 badge 9to13 14more We've updated and reorganized! Search &nbsp;Ben\u2019s Guide to the U.S. Government or visit&nbsp; the home page to start your Learning Adventure. Send questions or comments about Ben\u2019s Guide to our Feedback Form . Thank you. Let us know what you think about the new Ben's Guide! Your feedback"
+    },
+    {
+      "source_id": "S5",
+      "url": "http://purl.org/rss/1.0/modules/content/",
+      "domain": "purl.org",
+      "authority_score": 0.8,
+      "relevance_score": 0.41,
+      "title": "RDF Site Summary 1.0 Modules: Content",
+      "snippet": "RDF Site Summary 1.0 Modules: Content RDF Site Summary 1.0 Modules: Content Authors Gabe Beged-Dov , JFinity Systems LLC Aaron Swartz , AaronSw.com Eric van der Vlist , Dyomedea Version Latest Version: http://purl.org/rss/1.0/modules/content/ DRAFT 2.01 2002-10-04 (Renamed headings - thanks, Bijan!) - ASw DRAFT 2.0 2002-08-06 (Added content:encoded -- not yet approved; changed affiliation) - AS 1.02 2001-04-05 (Tweaked the copyright) as 1.01 2001-3-8 (Made content:encoding more clear) as 1.0 2001-3-8 (Approved by the WG and moved to standard) DRAFT 0.4 2001-2-6 (Cleaned up syntax and added encoding) as DRAFT 0.31 2000-12-26 (Updated stylesheet) as DRAFT 0.3 2000-12-13 (Removed content:stylesheet attribute; changed content:format to an rdf:resource) as DRAFT 0.2 2000-08-17 (Added content:st"
+    },
+    {
+      "source_id": "S4",
+      "url": "https://en.wikipedia.org/wiki/Main_Page",
+      "domain": "en.wikipedia.org",
+      "authority_score": 0.8,
+      "relevance_score": 0.385,
+      "title": "Wikipedia, the free encyclopedia",
+      "snippet": "Wikipedia, the free encyclopedia Jump to content Main menu Main menu move to sidebar hide Navigation Main page Contents Current events Random article About Wikipedia Contact us Contribute Help Learn to edit Community portal Recent changes Upload file Special pages Search Search Appearance Donate Create account Log in Personal tools Donate Create account Log in Main Page Main Page Talk English Read View source View history Tools Tools move to sidebar hide Actions Read View source View history General What links here Related changes Upload file Permanent link Page information Cite this page Get shortened URL Print/export Download as PDF Printable version In other projects Wikimedia Commons Wikimedia Foundation MediaWiki Meta-Wiki Wikimedia Outreach Multilingual Wikisource Wikispecies Wikiboo"
+    },
+    {
+      "source_id": "S7",
+      "url": "http://schema.org/",
+      "domain": "schema.org",
+      "authority_score": 0.8,
+      "relevance_score": 0.385,
+      "title": "Schema.org - Schema.org",
+      "snippet": "Schema.org - Schema.org Note : You are viewing the development version of Schema.org . See how we work for more details. Schema.org Docs Schemas Validate About Schema.org is a collaborative, community activity with a mission to create, maintain, and promote schemas for structured data on the Internet, on web pages, in email messages, and beyond. Schema.org vocabulary can be used with many different encodings, including RDFa, Microdata and JSON-LD. These vocabularies cover entities, relationships between entities and actions, and can easily be extended through a well-documented extension model. As of 2024, over 45 million web domains markup their web pages with over 450 billion Schema.org objects. Many applications from Google, Microsoft, Pinterest, Yandex and others already use these vocab"
+    }
+  ],
+  "helper_file": "/home/study-agents/domain/profile_name_template_helper.md"
+}

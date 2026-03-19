@@ -10,38 +10,93 @@ requires-python = ">=3.10"
 dependencies = [
   "aiohttp",
   "beautifulsoup4",
-  "docling[easyocr,tesseract,rapidocr]",
-  "fastapi",
-  "mcp[cli]",
   "numpy",
   "openai",
   "ollama",
-  "pypdf",
-  "pymupdf",
   "python-dotenv",
   "requests",
   "supabase",
-  "uvicorn",
-  "pydantic-ai",
+  "mcp[cli]",
 ]
 
 [project.optional-dependencies]
-vision = [
-  "keyboard",
-  "mss",
-  "pdf2image",
+api = [
+  "fastapi",
+  "uvicorn",
+  "pydantic-ai",
+]
+ocr = [
+  "docling[rapidocr]",
+  "pymupdf",
   "Pillow",
   "pytesseract",
   "rapidocr-onnxruntime",
 ]
-full = [
+cag = [
+  "fastapi",
+  "uvicorn",
+  "docling[rapidocr]",
+  "pymupdf",
+  "Pillow",
+  "pytesseract",
+  "rapidocr-onnxruntime",
+]
+rag = [
+  "aiohttp",
+  "docling[rapidocr]",
+  "pymupdf",
+  "Pillow",
+  "pytesseract",
+  "rapidocr-onnxruntime",
+]
+copilot = [
+  "fastapi",
+  "uvicorn",
+  "pydantic-ai",
+  "docling[rapidocr]",
+  "pymupdf",
+  "Pillow",
+  "pytesseract",
+  "rapidocr-onnxruntime",
+  "mss",
+]
+vision-client = [
+  "docling[rapidocr]",
   "keyboard",
   "mss",
   "pdf2image",
   "Pillow",
+  "qrcode[pil]",
   "pytesseract",
   "rapidocr-onnxruntime",
-  "crawl4ai",
+]
+easyocr = [
+  "easyocr<2.0,>=1.7",
+]
+server = [
+  "fastapi",
+  "uvicorn",
+  "pydantic-ai",
+  "docling[rapidocr]",
+  "pymupdf",
+  "Pillow",
+  "pytesseract",
+  "rapidocr-onnxruntime",
+  "mss",
+]
+full = [
+  "fastapi",
+  "uvicorn",
+  "pydantic-ai",
+  "docling[rapidocr]",
+  "pymupdf",
+  "Pillow",
+  "qrcode[pil]",
+  "pytesseract",
+  "rapidocr-onnxruntime",
+  "keyboard",
+  "mss",
+  "pdf2image",
 ]
 
 [project.scripts]
@@ -54,4 +109,6 @@ study-agents-graph-inspector = "study_agents.graph_inspector:main"
 study-agents-api = "study_agents.api_server:main"
 study-agents-kg-visualizer = "study_agents.kg_visualizer_agent:main"
 study-agents-manage = "study_agents.orchestrator:main"
+study-agents-domain-profile = "study_agents.domain_profile_agent:main"
 study-agents-validate = "study_agents.settings:validate_cli"
+study-agents-scenario-api = "study_agents.scenario_api:main"

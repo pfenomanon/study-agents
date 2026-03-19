@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Set
+from typing import List, Optional, Set
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -31,25 +31,18 @@ try:
     from bs4 import BeautifulSoup
 except ImportError:  # pragma: no cover - optional dependency
     BeautifulSoup = None
-try:
-    from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, LLMConfig
-    try:
-        from crawl4ai import DefaultMarkdownGenerator
-    except ImportError:  # pragma: no cover - API location differs by version
-        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-    from crawl4ai.content_filter_strategy import LLMContentFilter
-except ImportError:  # pragma: no cover - optional dependency
-    AsyncWebCrawler = None
-    BrowserConfig = None
-    CrawlerRunConfig = None
-    LLMConfig = None
-    DefaultMarkdownGenerator = None
-    LLMContentFilter = None
 
 from .config import OLLAMA_API_KEY, OLLAMA_HOST, REASON_MODEL
 from .kg_pipeline import EpisodeChunk, EpisodePayload, KnowledgeIngestionService
 from .ollama_client import chat as ollama_chat
+from .profile_namespace import (
+    build_profile_output_dir,
+    compose_group_id,
+    normalize_profile_id,
+)
+from .prompt_loader import load_required_prompt
 from .rag_builder_core import chunk_text, slugify, split_into_paragraphs
+from .security import validate_outbound_url
 from .settings import SettingsError, get_settings
 
 PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -61,40 +54,6 @@ _settings = get_settings()
 _OLLAMA_AVAILABLE = bool(os.getenv("OLLAMA_API_KEY") and os.getenv("OLLAMA_HOST"))
 if not _OLLAMA_AVAILABLE:
     logger.warning("OLLAMA_HOST/OLLAMA_API_KEY not set; falling back to heuristic scoring/link extraction.")
-_CRAWL4AI_AVAILABLE = all(
-    obj is not None
-    for obj in (
-        AsyncWebCrawler,
-        BrowserConfig,
-        CrawlerRunConfig,
-        LLMConfig,
-        DefaultMarkdownGenerator,
-        LLMContentFilter,
-    )
-)
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_optional_bool(
-    true_flag: bool,
-    false_flag: bool,
-    env_name: str,
-    *,
-    default: bool,
-) -> bool:
-    if true_flag and false_flag:
-        raise ValueError(f"Conflicting flags set for {env_name}")
-    if true_flag:
-        return True
-    if false_flag:
-        return False
-    return _env_bool(env_name, default=default)
 
 
 class SystemPrompt:
@@ -103,22 +62,29 @@ class SystemPrompt:
     def __init__(self, prompt_file: Path = DEFAULT_WEB_PROMPT):
         self.prompt_file = prompt_file
         self._prompt: Optional[str] = None
+        self._relevance_template = load_required_prompt(
+            "web_research_relevance_template.txt"
+        )
+        self._link_template = load_required_prompt(
+            "web_research_link_extraction_template.txt"
+        )
         self._load_prompt()
     
     def _load_prompt(self) -> None:
         """Load system prompt from file."""
+        if self.prompt_file == DEFAULT_WEB_PROMPT:
+            self._prompt = load_required_prompt("web_research_system_prompt.md")
+            return
         if self.prompt_file.exists():
-            self._prompt = self.prompt_file.read_text(encoding="utf-8")
+            self._prompt = self.prompt_file.read_text(encoding="utf-8").strip()
+            if not self._prompt:
+                raise RuntimeError(
+                    f"System prompt file '{self.prompt_file}' is empty."
+                )
         else:
-            logger.warning(
-                "System prompt file '%s' not found. Using built-in fallback instructions.",
-                self.prompt_file,
+            raise FileNotFoundError(
+                f"System prompt file '{self.prompt_file}' was not found."
             )
-            self._prompt = """
-You are a web research agent focused on fact-based research only.
-Prioritize authoritative sources, verify information, and avoid speculation.
-Extract comprehensive, accurate information suitable for research purposes.
-"""
 
 
     
@@ -129,55 +95,22 @@ Extract comprehensive, accurate information suitable for research purposes.
     
     def get_relevance_evaluation_prompt(self, query: str, url: str, content: str) -> str:
         """Get prompt for relevance evaluation with system guidance."""
-        return f"""
-{self.prompt}
-
-Based on the above guidelines, evaluate the relevance of this web content for the research query.
-
-Query: {query}
-URL: {url}
-
-Content preview (first 1000 chars):
-{content[:1000]}
-
-Rate relevance from 0.0 to 1.0 where:
-- 0.0 = Not relevant at all
-- 0.3 = Minimally relevant (some connection but low value)
-- 0.5 = Somewhat relevant (useful but not directly addressing query)
-- 0.7 = Highly relevant (directly addresses query with good information)
-- 1.0 = Extremely relevant (perfect match, authoritative source, comprehensive coverage)
-
-Consider:
-- Direct relevance to the query
-- Quality and reliability of the source
-- Depth of factual information
-- Uniqueness of the content
-- Authority and credibility of the source
-
-Respond with just the numeric score (0.0-1.0):
-"""
+        return (
+            self._relevance_template
+            .replace("__SYSTEM_PROMPT__", self.prompt)
+            .replace("__QUERY__", query)
+            .replace("__URL__", url)
+            .replace("__CONTENT_PREVIEW__", content[:1000])
+        )
     
     def get_link_extraction_prompt(self, content: str, base_url: str) -> str:
         """Get prompt for link extraction with system guidance."""
-        return f"""
-{self.prompt}
-
-Based on the above guidelines, extract relevant links from this HTML content for further research.
-
-Base URL: {base_url}
-
-Content (first 2000 chars):
-{content[:2000]}
-
-Extract links that are:
-1. Relevant to research and fact-based content
-2. Likely to contain valuable, authoritative information
-3. From credible sources (academic, official, research institutions)
-4. Not primarily marketing, opinion, or speculation
-
-Return links as a JSON list of URLs only:
-["url1", "url2", ...]
-"""
+        return (
+            self._link_template
+            .replace("__SYSTEM_PROMPT__", self.prompt)
+            .replace("__BASE_URL__", base_url)
+            .replace("__CONTENT_PREVIEW__", content[:2000])
+        )
 
 
 @dataclass
@@ -201,11 +134,18 @@ class SearchQuery:
 class WebCrawler:
     """Web crawler with robots.txt compliance."""
     
-    def __init__(self, max_retries: int = 3, retry_backoff: float = 0.75):
+    def __init__(
+        self,
+        max_retries: int = 3,
+        retry_backoff: float = 0.75,
+        *,
+        allow_private_networks: bool = False,
+    ):
         self.session: Optional[aiohttp.ClientSession] = None
         self.robots_cache: dict[str, RobotFileParser] = {}
         self.max_retries = max(1, max_retries)
         self.retry_backoff = max(retry_backoff, 0.0)
+        self.allow_private_networks = allow_private_networks
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(
@@ -223,6 +163,14 @@ class WebCrawler:
         """Check if URL can be fetched according to robots.txt."""
         if not self.session:
             raise RuntimeError("WebCrawler session is not initialized. Use 'async with WebCrawler()'.")
+
+        allowed, reason = validate_outbound_url(
+            url,
+            allow_private_networks=self.allow_private_networks,
+        )
+        if not allowed:
+            logger.warning("Blocked outbound URL %s: %s", url, reason)
+            return False
 
         parsed = urlparse(url)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
@@ -373,19 +321,22 @@ class WebCrawler:
         return None
 
     async def discover_llms_md(self, base_url: str) -> Optional[str]:
-        """Discover llms.md file for URL discovery."""
+        """Discover llms guide files (llms.md/llms.txt) for URL discovery."""
         parsed = urlparse(base_url)
         llms_urls = [
             f"{parsed.scheme}://{parsed.netloc}/llms.md",
+            f"{parsed.scheme}://{parsed.netloc}/llms.txt",
             f"{parsed.scheme}://{parsed.netloc}/.well-known/llms.md",
+            f"{parsed.scheme}://{parsed.netloc}/.well-known/llms.txt",
             f"{parsed.scheme}://{parsed.netloc}/api/llms.md",
+            f"{parsed.scheme}://{parsed.netloc}/api/llms.txt",
         ]
 
         for url in llms_urls:
             if await self.can_fetch(url):
                 content = await self.fetch_page(url)
                 if content:
-                    print(f"✅ Found llms.md: {url}")
+                    print(f"✅ Found llms guide: {url}")
                     return content
 
         return None
@@ -410,21 +361,25 @@ class WebResearchAgent:
         ingest_overlap: int = 120,
         resume_file: Optional[Path] = None,
         resume_reset: bool = False,
-        markdown_engine: Optional[str] = None,
-        crawl4ai_provider: Optional[str] = None,
-        crawl4ai_platform: Optional[str] = None,
-        crawl4ai_model: Optional[str] = None,
-        crawl4ai_api_token: Optional[str] = None,
-        crawl4ai_api_token_env: Optional[str] = None,
-        crawl4ai_chunk_token_threshold: Optional[int] = None,
-        crawl4ai_ignore_links: Optional[bool] = None,
-        crawl4ai_headless: Optional[bool] = None,
+        profile_id: Optional[str] = None,
+        agent_namespace: str = "web_research",
     ):
-        self.output_dir = output_dir
-        self.output_dir.mkdir(exist_ok=True)
+        self.profile_id = normalize_profile_id(profile_id) if profile_id else None
+        self.agent_namespace = agent_namespace
+        target_dir = (
+            build_profile_output_dir(output_dir, self.profile_id, agent_namespace)
+            if self.profile_id
+            else output_dir
+        )
+        self.output_dir = target_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.query = query
         self.use_llm_relevance = use_llm_relevance
         self.download_docs = download_docs
+        self.allow_private_networks = (
+            os.getenv("WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         self.download_manifest: list[dict] = []
         if self.download_docs:
             self.download_dir = self.output_dir / "downloads"
@@ -434,80 +389,6 @@ class WebResearchAgent:
         
         # Load system prompt
         self.system_prompt = SystemPrompt(system_prompt_file)
-
-        # Markdown extraction strategy controls.
-        env_markdown_engine = os.getenv("WEB_RESEARCH_MARKDOWN_ENGINE", "docling").strip().lower()
-        self.markdown_engine = (markdown_engine or env_markdown_engine or "docling").strip().lower()
-        if self.markdown_engine not in {"docling", "crawl4ai", "auto"}:
-            logger.warning(
-                "Unknown markdown engine '%s'; defaulting to docling.",
-                self.markdown_engine,
-            )
-            self.markdown_engine = "docling"
-
-        self.crawl4ai_platform = (
-            crawl4ai_platform
-            or os.getenv("WEB_RESEARCH_CRAWL4AI_PLATFORM", "openai")
-        ).strip()
-        self.crawl4ai_model = (
-            crawl4ai_model
-            or os.getenv("WEB_RESEARCH_CRAWL4AI_MODEL", "gpt-4o-mini")
-        ).strip()
-        auto_provider = (
-            f"{self.crawl4ai_platform}/{self.crawl4ai_model}"
-            if self.crawl4ai_platform and self.crawl4ai_model
-            else ""
-        )
-        self.crawl4ai_provider = (
-            crawl4ai_provider
-            or os.getenv("WEB_RESEARCH_CRAWL4AI_PROVIDER", auto_provider)
-            or auto_provider
-        ).strip()
-
-        token_env_name = (
-            crawl4ai_api_token_env
-            or os.getenv("WEB_RESEARCH_CRAWL4AI_API_TOKEN_ENV", "OPENAI_API_KEY")
-        ).strip()
-        token_direct = (
-            crawl4ai_api_token
-            if crawl4ai_api_token is not None
-            else os.getenv("WEB_RESEARCH_CRAWL4AI_API_TOKEN", "").strip()
-        )
-        if token_direct:
-            self.crawl4ai_api_token = token_direct.strip()
-        else:
-            self.crawl4ai_api_token = os.getenv(token_env_name, "").strip() if token_env_name else ""
-        self.crawl4ai_api_token_env = token_env_name
-
-        threshold_raw = (
-            str(crawl4ai_chunk_token_threshold)
-            if crawl4ai_chunk_token_threshold is not None
-            else os.getenv("WEB_RESEARCH_CRAWL4AI_CHUNK_TOKEN_THRESHOLD", "4096")
-        )
-        try:
-            self.crawl4ai_chunk_token_threshold = max(256, int(threshold_raw))
-        except ValueError:
-            self.crawl4ai_chunk_token_threshold = 4096
-
-        if crawl4ai_ignore_links is None:
-            self.crawl4ai_ignore_links = _env_bool(
-                "WEB_RESEARCH_CRAWL4AI_IGNORE_LINKS", default=False
-            )
-        else:
-            self.crawl4ai_ignore_links = bool(crawl4ai_ignore_links)
-
-        if crawl4ai_headless is None:
-            self.crawl4ai_headless = _env_bool(
-                "WEB_RESEARCH_CRAWL4AI_HEADLESS", default=True
-            )
-        else:
-            self.crawl4ai_headless = bool(crawl4ai_headless)
-
-        if self.markdown_engine in {"crawl4ai", "auto"} and not _CRAWL4AI_AVAILABLE:
-            logger.warning(
-                "Crawl4AI markdown engine requested but crawl4ai is not installed; "
-                "falling back to Docling/basic extraction."
-            )
         
         # Configure Ollama
         os.environ["OLLAMA_HOST"] = OLLAMA_HOST
@@ -529,7 +410,7 @@ class WebResearchAgent:
         self.resume_reset = resume_reset
         
         # Initialize crawler
-        self.crawler = WebCrawler()
+        self.crawler = WebCrawler(allow_private_networks=self.allow_private_networks)
 
         # Auto-ingest configuration
         self.auto_ingest = auto_ingest
@@ -609,6 +490,13 @@ class WebResearchAgent:
                 normalized = urljoin(f"https://{search_domain}", normalized)
             elif normalized.startswith("//"):
                 normalized = f"https:{normalized}"
+
+            allowed, _reason = validate_outbound_url(
+                normalized,
+                allow_private_networks=self.allow_private_networks,
+            )
+            if not allowed:
+                continue
 
             if normalized not in urls and normalized not in self.visited_urls and normalized.startswith("http"):
                 urls.append(normalized)
@@ -750,96 +638,9 @@ class WebResearchAgent:
         except Exception as e:
             print(f"⚠️ Link extraction failed: {e}")
             return []
-
-    def _use_crawl4ai_for_markdown(self) -> bool:
-        if self.markdown_engine == "docling":
-            return False
-        if self.markdown_engine in {"crawl4ai", "auto"} and _CRAWL4AI_AVAILABLE:
-            return True
-        return False
-
-    def _crawl4ai_instruction(self, url: str) -> str:
-        query_line = f"Research query: {self.query}\n" if self.query else ""
-        return (
-            f"{self.system_prompt.prompt}\n\n"
-            f"{query_line}"
-            "Task: Produce clean, high-signal markdown from this page.\n\n"
-            "Hard exclusions:\n"
-            "- table of contents/contents blocks\n"
-            "- global navigation, breadcrumbs, sidebars, headers, footers\n"
-            "- advertisements, sponsored/promotional blocks, cookie/privacy banners\n"
-            "- related-content link farms, social share widgets, pagination UI\n\n"
-            "Keep only primary factual content that helps answer domain questions.\n"
-            "Preserve meaningful headings, lists, and tables.\n"
-            "Do not add commentary or hallucinated content.\n"
-            f"Source URL: {url}\n"
-        )
-
-    def _extract_crawl4ai_markdown(self, crawl_result: Any) -> str:
-        markdown_obj = getattr(crawl_result, "markdown", None)
-        if isinstance(markdown_obj, str) and markdown_obj.strip():
-            return markdown_obj.strip()
-        if markdown_obj is not None:
-            for attr in (
-                "fit_markdown",
-                "markdown_with_citations",
-                "raw_markdown",
-                "markdown",
-            ):
-                value = getattr(markdown_obj, attr, None)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        for attr in ("fit_markdown", "markdown", "raw_markdown"):
-            value = getattr(crawl_result, attr, None)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return ""
-
-    async def _convert_to_markdown_crawl4ai(self, url: str) -> str:
-        if not _CRAWL4AI_AVAILABLE:
-            raise RuntimeError("crawl4ai dependency is not available")
-
-        llm_config = LLMConfig(
-            provider=self.crawl4ai_provider,
-            api_token=self.crawl4ai_api_token or None,
-        )
-        content_filter = LLMContentFilter(
-            llm_config=llm_config,
-            instruction=self._crawl4ai_instruction(url),
-            chunk_token_threshold=self.crawl4ai_chunk_token_threshold,
-            verbose=False,
-        )
-        markdown_generator = DefaultMarkdownGenerator(
-            content_filter=content_filter,
-            options={"ignore_links": self.crawl4ai_ignore_links},
-        )
-        run_config = CrawlerRunConfig(markdown_generator=markdown_generator)
-        browser_config = BrowserConfig(headless=self.crawl4ai_headless)
-
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await crawler.arun(url=url, config=run_config)
-
-        if not getattr(result, "success", False):
-            error = getattr(result, "error_message", "unknown crawl4ai error")
-            raise RuntimeError(str(error))
-
-        markdown = self._extract_crawl4ai_markdown(result)
-        if not markdown:
-            raise RuntimeError("crawl4ai returned empty markdown")
-        return markdown
-
+    
     async def convert_to_markdown(self, url: str, content: str) -> str:
-        """Convert web content to markdown using Crawl4AI or Docling."""
-        if self._use_crawl4ai_for_markdown():
-            try:
-                return await self._convert_to_markdown_crawl4ai(url)
-            except Exception as exc:
-                logger.warning(
-                    "Crawl4AI markdown conversion failed for %s: %s. Falling back to Docling/basic conversion.",
-                    url,
-                    exc,
-                )
-
+        """Convert web content to markdown using Docling."""
         # Save content to temporary file
         temp_file = self.output_dir / f"temp_{hash(url) % 100000}.html"
         temp_file.write_text(content, encoding='utf-8')
@@ -886,6 +687,13 @@ class WebResearchAgent:
         reset_state: bool = True,
     ) -> List[ResearchResult]:
         """Perform web research starting from a specific URL."""
+        start_allowed, reason = validate_outbound_url(
+            start_url,
+            allow_private_networks=self.allow_private_networks,
+        )
+        if not start_allowed:
+            raise ValueError(f"Blocked start_url: {reason}")
+
         print(f"[start] Starting research from: {start_url}")
 
         if reset_state:
@@ -923,7 +731,7 @@ class WebResearchAgent:
                     self.visited_urls.add(url)
                     print(f"[skip] Non-content URL pattern: {url}")
                     continue
-                
+
                 self.visited_urls.add(url)
                 processed_count += 1
                 
@@ -937,7 +745,7 @@ class WebResearchAgent:
                 if self._looks_like_machine_payload(content):
                     print(f"[skip] Machine payload detected: {url}")
                     continue
-                
+
                 title_match = re.search(r'<title[^>]*>([^<]+)</title>', content, re.IGNORECASE)
                 title = title_match.group(1).strip() if title_match else url
                 
@@ -979,6 +787,12 @@ class WebResearchAgent:
                 
                 if depth < max_depth:
                     for link in html_links:
+                        allowed, _reason = validate_outbound_url(
+                            link,
+                            allow_private_networks=self.allow_private_networks,
+                        )
+                        if not allowed:
+                            continue
                         if link not in self.visited_urls:
                             queue.append((link, depth + 1))
                 
@@ -1051,22 +865,19 @@ class WebResearchAgent:
         }
 
         def is_noise(tag) -> bool:
-            attrs: list[str] = []
-            tag_attrs = getattr(tag, "attrs", None)
-            if not isinstance(tag_attrs, dict):
+            if tag is None or getattr(tag, "attrs", None) is None:
                 return False
-            tag_id = tag_attrs.get("id")
-            if isinstance(tag_id, str) and tag_id:
-                attrs.append(tag_id)
-            tag_classes = tag_attrs.get("class")
-            if isinstance(tag_classes, str) and tag_classes:
-                attrs.extend(tag_classes.split())
-            elif isinstance(tag_classes, (list, tuple)):
-                attrs.extend(str(cls) for cls in tag_classes if cls)
+            attrs: list[str] = []
+            if tag.has_attr("id"):
+                attrs.append(tag["id"])
+            if tag.has_attr("class"):
+                attrs.extend(tag.get("class", []))
             combined = " ".join(attrs).lower()
             return any(token in combined for token in noise_tokens)
 
         for tag in list(body.find_all(True)):
+            if tag is None or getattr(tag, "parent", None) is None:
+                continue
             if tag.name in {"header", "footer", "nav", "aside"} or is_noise(tag):
                 tag.decompose()
 
@@ -1103,6 +914,8 @@ class WebResearchAgent:
         for tag in candidate.find_all(['footer']):
             tag.decompose()
         for tag in list(candidate.find_all(True)):
+            if tag is None or getattr(tag, "parent", None) is None:
+                continue
             if is_noise(tag):
                 tag.decompose()
 
@@ -1110,7 +923,7 @@ class WebResearchAgent:
         if "<body" not in cleaned.lower():
             cleaned = f"<html><body>{cleaned}</body></html>"
         return cleaned
-    
+
     def _is_probable_content_url(self, url: str) -> bool:
         """Filter out obvious machine endpoints (feeds, APIs, embeds, admin routes)."""
         parsed = urlparse(url)
@@ -1160,7 +973,7 @@ class WebResearchAgent:
         if "<rss" in snippet or "<feed" in snippet:
             return True
         return False
-    
+
     def _extract_simple_links(self, content: str, base_url: str) -> tuple[list[str], list[str]]:
         """Extract HTML links and document links from content."""
         from urllib.parse import urljoin, urlparse
@@ -1189,6 +1002,12 @@ class WebResearchAgent:
             
             lower_full = full_link.lower()
             if any(lower_full.endswith(ext) for ext in doc_extensions):
+                allowed, _reason = validate_outbound_url(
+                    full_link,
+                    allow_private_networks=self.allow_private_networks,
+                )
+                if not allowed:
+                    continue
                 doc_links.append(full_link)
                 continue
             
@@ -1198,6 +1017,12 @@ class WebResearchAgent:
                 or any(domain in parsed.netloc for domain in ['docs.', 'documentation.', 'api.', 'guide.'])
             ):
                 if not self._is_probable_content_url(full_link):
+                    continue
+                allowed, _reason = validate_outbound_url(
+                    full_link,
+                    allow_private_networks=self.allow_private_networks,
+                )
+                if not allowed:
                     continue
                 html_links.append(full_link)
         
@@ -1270,7 +1095,14 @@ class WebResearchAgent:
             return
 
         slug = slugify(result.markdown_path.stem)
-        group_id = f"{self.ingest_group}:{slug}"
+        if self.profile_id:
+            group_id = compose_group_id(
+                self.profile_id,
+                self.agent_namespace,
+                slug,
+            )
+        else:
+            group_id = f"{self.ingest_group}:{slug}"
         chunks: list[EpisodeChunk] = []
         for idx, chunk in enumerate(chunks_text, start=1):
             chunks.append(
@@ -1292,12 +1124,14 @@ class WebResearchAgent:
             source_type="html",
             reference_time=datetime.utcnow(),
             group_id=group_id,
+            profile_id=self.profile_id,
             tags=["web_research", "auto_ingest"],
             chunks=chunks,
             raw_text=text,
             metadata={
                 "markdown_path": str(result.markdown_path),
                 "relevance": result.relevance_score,
+                "profile_id": self.profile_id,
             },
         )
 
@@ -1412,63 +1246,6 @@ async def main():
         help="Use the reasoning model to score relevance instead of the heuristic filter.",
     )
     parser.add_argument(
-        "--markdown-engine",
-        choices=["docling", "crawl4ai", "auto"],
-        default=os.getenv("WEB_RESEARCH_MARKDOWN_ENGINE", "docling"),
-        help="Markdown conversion backend (default: WEB_RESEARCH_MARKDOWN_ENGINE or docling).",
-    )
-    parser.add_argument(
-        "--crawl4ai-provider",
-        default=None,
-        help="Crawl4AI LLM provider string (e.g., openai/gpt-4o-mini). Overrides platform/model.",
-    )
-    parser.add_argument(
-        "--crawl4ai-platform",
-        default=None,
-        help="Crawl4AI platform for provider assembly (e.g., openai, anthropic, ollama).",
-    )
-    parser.add_argument(
-        "--crawl4ai-model",
-        default=None,
-        help="Crawl4AI model for provider assembly (e.g., gpt-4o-mini).",
-    )
-    parser.add_argument(
-        "--crawl4ai-api-token",
-        default=None,
-        help="LLM API token used by Crawl4AI markdown filtering.",
-    )
-    parser.add_argument(
-        "--crawl4ai-api-token-env",
-        default=None,
-        help="Env var name to read LLM API token from (default: OPENAI_API_KEY).",
-    )
-    parser.add_argument(
-        "--crawl4ai-chunk-token-threshold",
-        type=int,
-        default=None,
-        help="Chunk token threshold for Crawl4AI LLM filter.",
-    )
-    parser.add_argument(
-        "--crawl4ai-ignore-links",
-        action="store_true",
-        help="When using Crawl4AI markdown generation, drop links from markdown output.",
-    )
-    parser.add_argument(
-        "--crawl4ai-keep-links",
-        action="store_true",
-        help="When using Crawl4AI markdown generation, keep links in markdown output.",
-    )
-    parser.add_argument(
-        "--crawl4ai-headless",
-        action="store_true",
-        help="Run Crawl4AI browser in headless mode.",
-    )
-    parser.add_argument(
-        "--crawl4ai-headed",
-        action="store_true",
-        help="Run Crawl4AI browser with visible UI (debugging).",
-    )
-    parser.add_argument(
         "--auto-ingest",
         action="store_true",
         help="Automatically ingest relevant markdown pages into Supabase.",
@@ -1506,24 +1283,14 @@ async def main():
         action="store_true",
         help="Ignore any existing resume file and start a fresh crawl.",
     )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Knowledge profile ID for output namespacing and ingestion.",
+    )
     args = parser.parse_args()
 
     resume_path = Path(args.resume_file).expanduser().resolve() if args.resume_file else None
-    try:
-        crawl4ai_ignore_links = _parse_optional_bool(
-            args.crawl4ai_ignore_links,
-            args.crawl4ai_keep_links,
-            "WEB_RESEARCH_CRAWL4AI_IGNORE_LINKS",
-            default=False,
-        )
-        crawl4ai_headless = _parse_optional_bool(
-            args.crawl4ai_headless,
-            args.crawl4ai_headed,
-            "WEB_RESEARCH_CRAWL4AI_HEADLESS",
-            default=True,
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
 
     try:
         settings = get_settings()
@@ -1538,15 +1305,6 @@ async def main():
         output_dir=Path(args.outdir).expanduser().resolve(),
         query=args.query,
         use_llm_relevance=args.llm_relevance,
-        markdown_engine=args.markdown_engine,
-        crawl4ai_provider=args.crawl4ai_provider,
-        crawl4ai_platform=args.crawl4ai_platform,
-        crawl4ai_model=args.crawl4ai_model,
-        crawl4ai_api_token=args.crawl4ai_api_token,
-        crawl4ai_api_token_env=args.crawl4ai_api_token_env,
-        crawl4ai_chunk_token_threshold=args.crawl4ai_chunk_token_threshold,
-        crawl4ai_ignore_links=crawl4ai_ignore_links,
-        crawl4ai_headless=crawl4ai_headless,
         download_docs=args.download_docs,
         auto_ingest=args.auto_ingest,
         ingest_threshold=args.ingest_threshold,
@@ -1555,6 +1313,7 @@ async def main():
         ingest_overlap=args.ingest_overlap,
         resume_file=resume_path,
         resume_reset=args.resume_reset,
+        profile_id=args.profile,
     )
     results = await agent.research_from_url(
         args.start_url,

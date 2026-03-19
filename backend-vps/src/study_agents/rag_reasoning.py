@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from openai import OpenAI
+from .ollama_client import chat as ollama_chat
 
 from .config import OLLAMA_API_KEY, OLLAMA_HOST, OPENAI_API_KEY, REASON_MODEL
+from .prompt_loader import load_required_prompt
 from .rag_builder_core import (
+    build_from_markdown,
     build_from_pdf,
     guess_headings,
     read_pdf_text_blocks,
@@ -27,22 +30,18 @@ from .rag_builder_core import (
 # ---------------------------------------------------------------------------
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CAG_PROMPT_PATH = PROJECT_ROOT / "CAG_CHUNKING_STRATEGY.md"
+PROMPT_FILENAME = "cag_chunking_strategy.md"
+USER_PROMPT_TEMPLATE_FILENAME = "rag_chunking_user_prompt_template.txt"
 
 
 def _load_cag_prompt() -> str:
-    try:
-        return CAG_PROMPT_PATH.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return (
-            "You are a Context Augmented Generation (CAG) architect. Design chunking and "
-            "metadata strategies that maximize retrieval precision, grounding, reranking, "
-            "and downstream flexibility. Always return JSON."
-        )
+    return load_required_prompt(PROMPT_FILENAME).strip()
 
 
 CAG_STRATEGY_PROMPT = _load_cag_prompt()
+CHUNKING_USER_PROMPT_TEMPLATE = load_required_prompt(
+    USER_PROMPT_TEMPLATE_FILENAME
+).strip()
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -165,22 +164,23 @@ class RAGReasoningPlanner:
 
     def _build_prompt(self, stats: dict, suggestion: dict) -> str:
         sample = "\n\n".join(stats.get("sample_paragraphs", [])[:3])
-        prompt = (
-            "You are a senior Retrieval-Augmented Generation architect.\n"
-            "Given PDF statistics and heuristic defaults, propose chunking + knowledge graph\n"
-            "settings optimized for high-quality RAG + Context-Aware Grouping (CAG).\n\n"
-            f"PDF_STATS = {json.dumps({k: v for k, v in stats.items() if k != 'sample_paragraphs'})}\n"
-            f"DEFAULTS = {json.dumps({k: suggestion[k] for k in ('chunk_size','overlap','max_sections','triples')})}\n"
-            f"TEXT_SAMPLE = \"{sample[:2000]}\"\n\n"
-            "Return JSON with keys:\n"
-            "  chunk_size (int, 800-2000)\n"
-            "  overlap (int, 80-300)\n"
-            "  max_sections (int)\n"
-            "  triples (int)\n"
-            "  notes (string rationale <= 200 chars)\n"
-            "Values must be integers, practical, and consistent with the defaults/stats."
+        return (
+            CHUNKING_USER_PROMPT_TEMPLATE
+            .replace(
+                "__PDF_STATS__",
+                json.dumps({k: v for k, v in stats.items() if k != "sample_paragraphs"}),
+            )
+            .replace(
+                "__DEFAULTS__",
+                json.dumps(
+                    {
+                        k: suggestion[k]
+                        for k in ("chunk_size", "overlap", "max_sections", "triples")
+                    }
+                ),
+            )
+            .replace("__TEXT_SAMPLE__", sample[:2000].replace('"', '\\"'))
         )
-        return prompt
 
     def _call_reasoning_model(self, prompt: str, provider: str) -> str:
         if provider == "openai" and self._openai_client:
@@ -259,6 +259,49 @@ class RAGBuildAgent:
     def __init__(self, planner: Optional[RAGReasoningPlanner] = None) -> None:
         self.planner = planner or RAGReasoningPlanner()
 
+    def _plan_for_markdown(self, markdown_path: Path, overrides: Optional[dict]) -> ReasoningPlan:
+        text = markdown_path.read_text(encoding="utf-8")
+        paragraphs = split_into_paragraphs(text)
+        para_count = max(1, len(paragraphs))
+        avg_chars_para = int(sum(len(p) for p in paragraphs) / para_count)
+
+        if avg_chars_para > 1400:
+            chunk_size = 1700
+        elif avg_chars_para > 900:
+            chunk_size = 1500
+        else:
+            chunk_size = 1200
+
+        overlap = max(120, min(260, int(chunk_size * 0.18)))
+        max_sections = min(120, max(30, int(para_count * 0.3)))
+        triples = int(min(1200, max(120, para_count * 0.25)))
+
+        if overrides:
+            if overrides.get("chunk_size") is not None:
+                chunk_size = int(overrides["chunk_size"])
+            if overrides.get("overlap") is not None:
+                overlap = int(overrides["overlap"])
+            if overrides.get("max_sections") is not None:
+                max_sections = int(overrides["max_sections"])
+            if overrides.get("triples") is not None:
+                triples = int(overrides["triples"])
+
+        return ReasoningPlan(
+            chunk_size=chunk_size,
+            overlap=overlap,
+            max_sections=max_sections,
+            triples=triples,
+            provider="heuristic",
+            model="n/a",
+            notes="markdown heuristic defaults",
+            stats={
+                "paragraphs": para_count,
+                "avg_chars_para": avg_chars_para,
+                "chars_total": len(text),
+            },
+            raw_response="",
+        )
+
     def build_bundle(
         self,
         pdf_path: Path,
@@ -266,15 +309,30 @@ class RAGBuildAgent:
         outdir: Path,
         overrides: Optional[dict] = None,
     ) -> BuildResult:
-        plan = self.planner.plan_for_pdf(pdf_path, overrides=overrides)
-        artifacts = build_from_pdf(
-            pdf_path=pdf_path,
-            outdir=outdir,
-            chunk_size=plan.chunk_size,
-            chunk_overlap=plan.overlap,
-            max_sections=plan.max_sections,
-            triples_budget=plan.triples,
-        )
+        source_path = Path(pdf_path)
+        suffix = source_path.suffix.lower()
+        if suffix == ".pdf":
+            plan = self.planner.plan_for_pdf(source_path, overrides=overrides)
+            artifacts = build_from_pdf(
+                pdf_path=source_path,
+                outdir=outdir,
+                chunk_size=plan.chunk_size,
+                chunk_overlap=plan.overlap,
+                max_sections=plan.max_sections,
+                triples_budget=plan.triples,
+            )
+        elif suffix == ".md":
+            plan = self._plan_for_markdown(source_path, overrides)
+            artifacts = build_from_markdown(
+                markdown_path=source_path,
+                outdir=outdir,
+                chunk_size=plan.chunk_size,
+                chunk_overlap=plan.overlap,
+                max_sections=plan.max_sections,
+                triples_budget=plan.triples,
+            )
+        else:
+            raise ValueError(f"Unsupported source type: {source_path.suffix}")
         # attach plan metadata file next to artifacts
         plan_path = Path(artifacts["folder"]) / "reasoning_plan.json"
         with open(plan_path, "w", encoding="utf-8") as f:
@@ -284,4 +342,3 @@ class RAGBuildAgent:
 
 
 __all__ = ["RAGReasoningPlanner", "RAGBuildAgent", "ReasoningPlan", "BuildResult"]
-from .ollama_client import chat as ollama_chat

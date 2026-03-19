@@ -24,6 +24,7 @@ class EpisodePayload:
     source_type: str
     reference_time: datetime
     group_id: str
+    profile_id: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     chunks: list[EpisodeChunk] = field(default_factory=list)
     raw_text: Optional[str] = None
@@ -38,6 +39,7 @@ class GraphNodeCandidate:
     title: str
     node_type: str
     group_id: str
+    profile_id: Optional[str] = None
     attrs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,6 +51,7 @@ class GraphEdgeCandidate:
     dst: str
     rel: str
     group_id: str
+    profile_id: Optional[str] = None
     attrs: dict[str, Any] = field(default_factory=dict)
     valid_at: Optional[datetime] = None
     invalid_at: Optional[datetime] = None

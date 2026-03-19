@@ -1,0 +1,25 @@
+Build the best domain profile for this profile request.
+
+Profile name:
+__PROFILE_NAME__
+
+Domain seed:
+__DOMAIN__
+
+Helper guidance:
+__HELPER_TEXT__
+
+Base profile JSON:
+__BASE_PROFILE_JSON__
+
+Research source summaries (ranked):
+__SOURCE_SUMMARIES_JSON__
+
+Instructions:
+- Start from the base profile and adapt it to the requested domain.
+- Use source evidence to specialize the profile fields.
+- Keep the output schema exactly as requested by the system message.
+- Ensure `field_evidence` covers all required fields with valid source IDs.
+- Replace generic ontology labels with domain-native ones for this domain.
+- Keep `entity_types` in PascalCase and `relationship_types` in snake_case.
+- Do not return unchanged generic `relationship_priorities`; make them domain-specific.

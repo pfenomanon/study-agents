@@ -57,10 +57,6 @@
     "Responsible role and required action",
     "Critical timeline milestone"
   ],
-  "forbidden_terms": [
-    "TWIA",
-    "Homeowners Policy (HO-3)",
-    "licensed insurance adjuster"
-  ],
+  "forbidden_terms": [],
   "allow_legacy_terms": false
 }

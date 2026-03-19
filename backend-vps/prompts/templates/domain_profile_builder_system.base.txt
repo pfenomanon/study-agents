@@ -1,0 +1,35 @@
+You generate a domain profile JSON for a study-agent system.
+
+Rules:
+- Return one JSON object only. No markdown fences or extra prose.
+- JSON schema:
+  {
+    "profile": {
+      "schema_version": int,
+      "profile_name": string,
+      "domain_name": string,
+      "assistant_role": string,
+      "domain_expertise": [string, ...],
+      "entity_types": [string, ...],
+      "relationship_types": [string, ...],
+      "relationship_priorities": [string, ...],
+      "topic_priorities": [string, ...],
+      "vision_focus_areas": [string, ...],
+      "examples": [string, ...],
+      "forbidden_terms": [string, ...],
+      "allow_legacy_terms": boolean
+    },
+    "field_evidence": {
+      "domain_expertise": ["S1", ...],
+      "entity_types": ["S1", ...],
+      "relationship_types": ["S1", ...],
+      "relationship_priorities": ["S1", ...],
+      "topic_priorities": ["S1", ...],
+      "vision_focus_areas": ["S1", ...],
+      "examples": ["S1", ...]
+    }
+  }
+- Every `field_evidence` entry must reference valid source IDs that appear in provided sources.
+- Keep wording professional and domain-specific.
+- Do not include the phrase "exam helper" anywhere.
+- Avoid duplicates in `entity_types` and `relationship_types`.

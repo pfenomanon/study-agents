@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "profile_name": "texas_insurance_adjuster",
-  "domain_name": "regulated insurance industries",
-  "assistant_role": "licensed Texas Property & Casualty Insurance Agent and All-Lines Adjuster",
+  "domain_name": "texas insurance adjuster",
+  "assistant_role": "subject-matter-expert assistant for texas insurance adjuster",
   "domain_expertise": [
-    "Texas homeowners and windstorm coverage interpretation",
-    "TWIA eligibility and endorsement implications",
-    "policy exclusions, limitations, and deductible impacts",
-    "claims workflow obligations, notice timelines, and documentation requirements"
+    "terminology normalization and concept boundaries",
+    "evidence-grounded reasoning from provided context",
+    "workflow and dependency analysis",
+    "risk, exception, and limitation identification"
   ],
   "entity_types": [
     "Document",
@@ -16,9 +16,8 @@
     "RegulatoryBody",
     "Process",
     "Term",
-    "CoverageForm",
-    "PolicyFeature",
-    "Party",
+    "Concept",
+    "Role",
     "Obligation",
     "Risk",
     "Timeline"
@@ -29,32 +28,34 @@
     "defines",
     "part_of",
     "references",
-    "contradicts"
+    "contradicts",
+    "depends_on",
+    "enables"
   ],
   "relationship_priorities": [
-    "regulatory authority over coverage requirements",
-    "coverage requirements and eligibility dependencies",
-    "section-to-policy hierarchy",
-    "exceptions and contradictions in policy language"
+    "requirements and prerequisites",
+    "process ordering and dependencies",
+    "authority and governance links",
+    "exceptions and contradictions"
   ],
   "topic_priorities": [
-    "coverage and eligibility requirements",
-    "limitations and exclusions",
-    "compliance obligations and notice requirements",
-    "roles and responsibilities of parties",
-    "timelines and deadlines tied to claim handling"
+    "core definitions and terminology",
+    "requirements and constraints",
+    "roles and responsibilities",
+    "timelines and dependencies",
+    "risks, exceptions, and limitations"
   ],
   "vision_focus_areas": [
-    "Texas-specific relevance",
-    "coverage applicability and exclusions",
-    "clear adjuster workflow recommendations"
+    "correctness to provided context",
+    "clear next-step guidance",
+    "explicit assumptions and limitations"
   ],
   "examples": [
-    "Homeowners Policy (HO-3)",
-    "Coverage A - Dwelling",
-    "Windstorm exclusion",
-    "Eligibility: primary residence",
-    "Obligation: 24-hour claim notice"
+    "Primary process definition",
+    "Eligibility or precondition rule",
+    "Explicit limitation or exception",
+    "Responsible role and required action",
+    "Critical timeline milestone"
   ],
   "forbidden_terms": [],
   "allow_legacy_terms": true

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "profile_name": "FLIR thermographer",
+  "domain_name": "FLIR thermographer",
+  "assistant_role": "subject-matter-expert assistant for FLIR thermographer",
+  "domain_expertise": [
+    "core concepts, terminology, and constraints in FLIR thermographer",
+    "evidence-grounded reasoning and decision support for FLIR thermographer",
+    "workflow sequencing, dependencies, and exception handling in FLIR thermographer",
+    "risk, limitation, and compliance awareness relevant to FLIR thermographer"
+  ],
+  "entity_types": [
+    "Document",
+    "Section",
+    "Requirement",
+    "RegulatoryBody",
+    "Process",
+    "Term",
+    "Concept",
+    "Role",
+    "Obligation",
+    "Risk",
+    "Timeline"
+  ],
+  "relationship_types": [
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts",
+    "depends_on",
+    "enables"
+  ],
+  "relationship_priorities": [
+    "requirements and prerequisites",
+    "process ordering and dependencies",
+    "authority and governance links",
+    "exceptions and contradictions"
+  ],
+  "topic_priorities": [
+    "core definitions and terminology in FLIR thermographer",
+    "requirements, prerequisites, and constraints in FLIR thermographer",
+    "roles, responsibilities, and workflow handoffs in FLIR thermographer",
+    "timelines, deadlines, and operational dependencies in FLIR thermographer",
+    "risks, limitations, and exceptions in FLIR thermographer"
+  ],
+  "vision_focus_areas": [
+    "context-grounded correctness for FLIR thermographer questions",
+    "clear next-step guidance for practitioners",
+    "explicit assumptions, limitations, and abstention when evidence is missing"
+  ],
+  "examples": [
+    "Primary workflow or process in FLIR thermographer",
+    "Eligibility or prerequisite condition in FLIR thermographer",
+    "A common exception or limitation in FLIR thermographer",
+    "Responsible role and required action in FLIR thermographer",
+    "Critical timeline milestone in FLIR thermographer"
+  ],
+  "forbidden_terms": [],
+  "allow_legacy_terms": false
+}

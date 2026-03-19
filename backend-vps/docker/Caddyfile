@@ -1,0 +1,77 @@
+{
+    email {$ACME_EMAIL}
+    admin off
+}
+
+# Machine-terminated TLS gateway.
+# Set PUBLIC_DOMAIN in .env to the DNS name pointing to this host.
+{$PUBLIC_DOMAIN:localhost} {
+    encode gzip zstd
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
+
+    route {
+        respond /healthz 200
+
+        # Temporary capture session pages are protected by session ID + one-time code,
+        # so allow them regardless of source IP allowlist.
+        @capture_session path /capture-session*
+        handle @capture_session {
+            reverse_proxy cag-service:8000
+        }
+
+        @allowlisted remote_ip {$GATEWAY_ALLOWED_CIDRS:127.0.0.1/32 ::1/128}
+        handle @allowlisted {
+            @authelia path /authelia*
+            handle @authelia {
+                reverse_proxy authelia:9091
+            }
+
+            # OIDC endpoints must be reachable without an existing app session.
+            @authelia_oidc path /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/*
+            handle @authelia_oidc {
+                reverse_proxy authelia:9091
+            }
+
+            # CAG API endpoints are protected via API_TOKEN at the application layer.
+            # Bypass interactive Authelia redirects so CLI clients receive JSON responses.
+            @cag path /cag-answer /cag-ocr-answer /capture-session*
+            handle @cag {
+                reverse_proxy cag-service:8000
+            }
+
+            # Authelia enforces MFA and login regulation.
+            # Regulation is configured with 3 failures -> 20 minute source cooldown.
+            @protected {
+                not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /cag-answer /cag-ocr-answer /capture-session*
+            }
+            forward_auth @protected authelia:9091 {
+                uri /api/authz/forward-auth
+                copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+            }
+
+            @rag path /build
+            handle @rag {
+                reverse_proxy rag-service:8100
+            }
+
+            @copilot_api path /copilot/*
+            handle @copilot_api {
+                reverse_proxy copilot-service:9010
+            }
+
+            handle {
+                reverse_proxy copilot-frontend:3000
+            }
+        }
+
+        handle {
+            respond "Access denied: source IP is not allowlisted." 403
+        }
+    }
+}

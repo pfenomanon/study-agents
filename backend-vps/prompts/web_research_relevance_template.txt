@@ -1,0 +1,25 @@
+__SYSTEM_PROMPT__
+
+Based on the above guidelines, evaluate the relevance of this web content for the research query.
+
+Query: __QUERY__
+URL: __URL__
+
+Content preview (first 1000 chars):
+__CONTENT_PREVIEW__
+
+Rate relevance from 0.0 to 1.0 where:
+- 0.0 = Not relevant at all
+- 0.3 = Minimally relevant (some connection but low value)
+- 0.5 = Somewhat relevant (useful but not directly addressing query)
+- 0.7 = Highly relevant (directly addresses query with good information)
+- 1.0 = Extremely relevant (perfect match, authoritative source, comprehensive coverage)
+
+Consider:
+- Direct relevance to the query
+- Quality and reliability of the source
+- Depth of factual information
+- Uniqueness of the content
+- Authority and credibility of the source
+
+Respond with just the numeric score (0.0-1.0):

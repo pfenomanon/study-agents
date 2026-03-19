@@ -2,12 +2,12 @@
 
 Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, covering RAG chunking, CAG knowledge graph enrichment, Supabase vector storage, and MCP tooling for downstream question answering.
 
-> For fresh clone/pull onboarding, use the root `GETTING_STARTED.md` first. This README contains additional implementation detail and historical notes, and may reference components from the original monorepo that are not shipped in this split deployment package.
-
 ## Quick Links
 - `AGENTS_EXECUTION_PLAN.md`: execution order, system prompt, and what each agent does.
 - `AGENTS_COMPLETE_GUIDE.md`: deep-dive docs + troubleshooting.
 - `supabase_schema.sql`: create new Supabase tables/function before ingesting data.
+- `supabase/migrations/202603150001_profile_catalog.sql`: additive migration for profile namespaces + profile catalog.
+- `docs/PROFILE_API.md`: profile endpoint contracts used by Copilot UI/CLI.
 
 ## Packaging & Deployment Helpers
 
@@ -18,8 +18,8 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
 - `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `status`, `logs`, `stop`).
-- `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, plus a utility image for CLIs).
-- `docker/*.Dockerfile`: per-service images; all include the `[full]` extra (vision/OCR). The root `Dockerfile` is a slim MCP/CLI image if you want a single-container runtime.
+- `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
+- `docker/python.Dockerfile`: single shared Python runtime image used by CAG/RAG/Copilot/utility services with service-specific commands.
 
 ## Graph Inspector & Visualization
 
@@ -37,21 +37,31 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 
 ### Vision Agent Modes & Margins
 
-- Native no-Python remote capture clients are available under `../local-run/native/`:
-  - `vision_remote_capture_windows.ps1`
-  - `vision_remote_capture_macos.sh`
-  These clients capture locally, bootstrap secure capture sessions (`/capture-session/start`), then send images to `/cag-ocr-answer`; OCR/CAG stays on VPS.
 - Run the vision agent as a module so you can pass margins in inches (converted using `--dpi`, default 96):
   - `python -m study_agents.vision_agent --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0`
 - Modes are controlled by `REMOTE_MODE` (env) or `--mode`:
   - `local` (default): screenshot -> OCR -> **local CAGAgent.enhanced_retrieve_context** (vector + KG) -> Ollama cloud reasoning.
   - `remote`: screenshot -> OCR -> text question sent to `/cag-answer` on the VPS.
   - `remote_image`: screenshot uploaded as image to `/cag-ocr-answer` on the VPS (OCR + CAG fully remote).
+    - Creates a temporary VPS-hosted session page (`/capture-session/<id>`) with a 6-character access code.
+    - CLI prints both `Session report URL (VPS)` and `Session access code`.
+    - The phone page prompts for the code and then displays appended:
+      - `Question:`
+      - `Answer:`
+      - `Rationale:`
+      - `Citations:`
+    - CLI also creates a local QR popup page so the phone can scan directly to the VPS URL.
+- Session page flags (remote_image mode):
+  - `--no-session-web`: disable temporary VPS session creation.
+  - `--no-session-web-open`: do not auto-open the local QR popup page.
+  - `--session-web-ttl-minutes <n>`: session lifetime on VPS (default `120`).
+  - `--no-session-web-qr`: disable QR generation for session URL.
+  - `--session-web-qr-ascii`: also print an ASCII QR in terminal (best effort).
 - Example one-liners (Windows CMD):
   - Remote text:  
-    `set REMOTE_MODE=remote && set REMOTE_CAG_URL=http://<vps-ip>:8000/cag-answer && python -m study_agents.vision_agent --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0`
+    `set REMOTE_MODE=remote && set REMOTE_API_TOKEN=<token> && set REMOTE_CAG_URL=https://<domain>/cag-answer && python -m study_agents.vision_agent --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0`
   - Remote image:  
-    `set REMOTE_MODE=remote_image && set REMOTE_IMAGE_URL=http://<vps-ip>:8000/cag-ocr-answer && python -m study_agents.vision_agent --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0`
+    `set REMOTE_MODE=remote_image && set REMOTE_API_TOKEN=<token> && set REMOTE_IMAGE_URL=https://<domain>/cag-ocr-answer && python -m study_agents.vision_agent --dpi 96 --top-in 1.0 --left-in 0.5 --right-in 0.5 --bottom-in 1.0`
 
 ### KB Capture Agent (Screenshot → Markdown)
 
@@ -89,9 +99,22 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `--max-seconds` stops the crawl after the specified time even if depth/page limits haven’t been reached.
   - `--auto-ingest` enables automatic Supabase ingestion for pages meeting `--ingest-threshold` (defaults to 0.5). Chunk sizing/overlap can be tuned via `--ingest-chunk-size` / `--ingest-overlap`, and `--ingest-group` prefixes the Supabase `group_id`.
   - `--resume-file` persists crawl state (queue + visited set) so you can restart long crawls later. Pair with `--resume-reset` to discard existing state.
-  - `--markdown-engine` selects markdown prep backend (`docling`, `crawl4ai`, or `auto`).
-  - Crawl4AI LLM filtering controls: `--crawl4ai-provider` or `--crawl4ai-platform` + `--crawl4ai-model`, plus token options `--crawl4ai-api-token` / `--crawl4ai-api-token-env`.
-  - Equivalent env controls are available in `.env.example` (`WEB_RESEARCH_MARKDOWN_ENGINE`, `WEB_RESEARCH_CRAWL4AI_*`).
+  - `--profile` scopes outputs and ingestion IDs under `profiles/<profile>/...` and `group_id=profile:<profile>:...`.
+
+### Profile Catalog
+
+- Use profile-aware namespaces to keep subject matter lanes separated across outputs and Supabase rows.
+- CLI commands:
+  - `study-agents-manage profile list`
+  - `study-agents-manage profile show --profile-id <profile>`
+  - `study-agents-manage profile use --profile-id <profile>`
+  - `study-agents-manage profile current`
+- Copilot backend endpoints:
+  - `GET /profiles`
+  - `GET /profiles/{profile_id}`
+  - `POST /profiles`
+  - `POST /profiles/use`
+  - Full request/response contracts: `docs/PROFILE_API.md`.
 
 ### Curation Workflow
 
@@ -102,59 +125,36 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 ## Prompt Customization
 
 - All system prompts live under `prompts/`:
-  - `vision_reasoning.txt`, `kg_entity_extraction.txt`, `kg_edge_extraction.txt`
-  - `cag_entity_extraction.txt`, `cag_relationship_extraction.txt`, `cag_answer_generation.txt`, `cag_cluster_topic.txt`
-  - `scenario_answer_structuring.txt`
+  - `vision_reasoning.txt`, `cag_entity_extraction.txt`, `cag_relationship_extraction.txt`, `cag_answer_generation.txt`, `cag_cluster_topic.txt`
   - `markdown_system_prompt.md` (KB capture), `web_research_system_prompt.md`
+  - `copilot_orchestrator_system.txt`, `scenario_structuring_system.txt`, `cag_chunking_strategy.md`
+  - `cag_grounding_verifier_system.txt`, `cag_grounding_repair_system.txt`, `rag_chunking_user_prompt_template.txt`
+  - `kb_context_user_prompt_template.txt`, `kb_fallback_user_prompt_template.txt`, `web_research_relevance_template.txt`, `web_research_link_extraction_template.txt`
+  - `scenario_structuring_user_prompt_template.txt`, `scenario_question_context_template.txt`
 - Edit these files (or set `PROMPTS_DIR=/path/to/prompts`) to tweak agent behavior without touching code. Changes take effect the next time the agent runs.
-- For safe domain-wide personalization, use the profile wizard to regenerate agent-intent prompt families (KG entity/edge, vision reasoning, CAG answer synthesis, scenario structuring) with schema guardrails:
-  ```bash
-  python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --apply --check
-  ```
-  Fastest onboarding for new users (auto-creates profile JSON):
-  ```bash
-  python3 scripts/domain_wizard.py --quickstart --profile-name <your-domain> --use-ai --platform openai --model gpt-5.2 --apply --check
-  ```
-  Optional: pass `--domain "plain english domain phrase"` to override the inferred domain seed.
-  Optional AI-assisted generation:
-  ```bash
-  python3 scripts/domain_wizard.py --interactive --profile-name <your-domain> --use-ai --apply --check
-  ```
-  The wizard is template-family aware by agent intent and now supports:
-  - `entity` -> KG entity extraction prompt
-  - `edge` -> KG edge extraction prompt
-  - `vision` -> screenshot reasoning prompt
-  - `cag_answer` -> CAG final answer synthesis prompt (Graphiti context graph aware)
-  - `scenario_structurer` -> scenario answer JSON structuring prompt
-  Use `--targets` to generate only the families you want.
-  AI mode is slot-locked: the model can refine domain slots, but cannot rewrite the fixed scaffold/contracts for each family.
-  The wizard auto-loads available `.env` files (including typical VPS paths) and uses the same runtime routing semantics as vision/API (`REASON_PLATFORM`, `REASON_MODEL`, `OLLAMA_TARGET`, provider keys). Optional overrides: `--platform`, `--model`, `--ollama-target`. Use `--env-file /path/to/.env` to force a specific env source.
-  By default, AI failures fall back to deterministic template output; use `--no-ai-fallback` to fail hard.
-  Profile keys `assistant_role`, `domain_expertise`, and `vision_focus_areas` define the expertise and response behavior injected into `vision_reasoning.txt`.
-  Profiles live in `domain/profiles/`; base templates live under `prompts/templates/`.
-  For fully automated onboarding (research -> profile JSON -> prompt generation), use:
-  ```bash
-  python3 scripts/domain_profile_pipeline.py \
-    --profile-name <your-domain> \
-    --domain "<plain english domain phrase>" \
-    --use-ai --platform openai --model gpt-5.2 \
-    --generate-prompts
-  ```
-  This pipeline writes:
-  - `domain/profiles/<profile>.json`
-  - `domain/research/<profile>/dossier.json`
-  - `domain/research/<profile>/validation_report.json`
-  - `domain/research/<profile>/profile_generation_report.md`
-  It is guided by `domain/profile_name_template_helper.md`.
+  - Generate personalized prompt files from templates using the Domain Wizard:
+    - `python scripts/domain_wizard.py --profile-name <profile_slug> --quickstart --apply --check`
+    - Example: `python scripts/domain_wizard.py --profile-name texas_expert_independent_insurance_adjuster_all_lines --apply --check`
+    - Profiles are stored in `domain/profiles/`; templates live in `prompts/templates/`.
+  - Run the same flow through the control-plane agent wrapper:
+    - `study-agents-domain-profile --profile-name <profile_slug> --domain "<domain phrase>"`
+    - Or via orchestrator: `study-agents-manage domain-profile --profile-name <profile_slug> --domain "<domain phrase>"`
+    - Copilot API endpoint: `POST /domain/wizard`
+    - Domain wizard run history: `GET /domain/wizard/history?profile_id=<profile_slug>&limit=20`
+  - `copilot-service` model selection can be controlled with `COPILOT_AGENT_MODEL` (full provider:model string) or `COPILOT_AGENT_PROVIDER`.
+  - scenario structuring model/runtime can be controlled with `SCENARIO_STRUCTURING_PLATFORM`, `SCENARIO_STRUCTURING_MODEL`, and `SCENARIO_STRUCTURING_OLLAMA_TARGET`.
+  - KG extraction model can be controlled with `KG_EXTRACTION_MODEL` (falls back to `SCHEMA_MODEL_NAME`/`MODEL_NAME`).
 
 ## Docker Compose
 
-Use `docker compose up --build` from this directory to spin up **per-agent services**:
+Use `docker compose up --build` from this directory to spin up services. The Python services share one image (`study-agents-python`), then run different entrypoints:
 
 - `cag-service` (port 8000): runs `study_agents.api_server` (`/cag-answer`, `/cag-ocr-answer`) and writes `data/qa_sessions/qa_log.md`.
 - `rag-service` (port 8100): exposes `POST /build` to trigger the reasoning-driven RAG bundle builder.
 - `utility-service`: base image kept running via `tail -f /dev/null` so you can `docker compose run utility-service ...` for any one-off CLI agent (web research, RAG ingestion, etc.) without rebuilding images.
 - `copilot-service` (port 9010): PydanticAI backend; now exposes `/copilot/capture` for capture + OCR + answer.
+- `copilot-frontend` (port 3000): CopilotKit UI with chat + Vision Capture card. Run on a machine with a display or attach a virtual display (Xvfb) if headless.
+- `tls-gateway` (ports 80/443): machine-terminated HTTPS reverse proxy. Set `PUBLIC_DOMAIN` and `ACME_EMAIL` in `.env`.
 
 All services mount `.env`, `prompts/`, and the relevant `data/` folders so you can edit prompts or documents on the host and the containers see the changes immediately.
 
@@ -183,6 +183,17 @@ docker compose run --rm utility-service \
     --download-docs --max-seconds 300
 ```
 
+### Docker Storage Maintenance
+
+- Keep volumes intact and prune only build/image artifacts:
+  ```bash
+  ./scripts/docker_prune_safe.sh
+  ```
+- Equivalent manual commands:
+  - `docker builder prune -af`
+  - `docker image prune -af`
+- Do not use `docker volume prune` unless you intentionally want to delete persisted data.
+
 ## MCP Tools
 
 When you run `study-agents-mcp`, the following tools become available to MCP clients (Claude Desktop, Windsurf, etc.):
@@ -203,7 +214,8 @@ study-agents-mcp
 1. Copy `.env.example` to `.env` and fill in your keys/models/URLs.
 2. Install the package with the extras you need:
    - Core CLI/API only: `pip install -e .`
-   - Screenshot/vision tooling: `pip install -e .[vision]`
+   - API + OCR server runtime: `pip install -e .[server]`
+   - Screenshot/vision client tooling: `pip install -e .[vision-client]`
    - Everything: `pip install -e .[full]`
 3. Validate your environment before launching any agents:
    ```bash
@@ -219,16 +231,19 @@ layer (semantic + BM25 + graph). Leave it unset to keep the legacy vector-only f
 you test the new pipeline.
 
 ### Updated defaults and ingestion path
-- Docling PDF/OCR extraction is enabled by default (`RAG_USE_DOCLING=true`). The Docker images now install the `[full]` extra to include vision/OCR dependencies.
+- Docling PDF/OCR extraction is enabled by default (`RAG_USE_DOCLING=true`). Docker now installs the `.[server]` extra by default and keeps EasyOCR as optional (`.[easyocr]`) to avoid pulling CUDA-heavy GPU packages on VPS hosts.
+- The shared Python Docker image pins CPU-only `torch`/`torchvision` wheels and fails the build if CUDA/NVIDIA Python packages are detected.
 - The CAG CLI routes documents through the unified kg_pipeline Episode → Extraction → Supabase flow (grouped by document slug) to avoid duplicate nodes/edges.
 - Web Research Agent no longer hard-requires Ollama; if `OLLAMA_HOST`/`OLLAMA_API_KEY` are missing, it falls back to heuristic scoring/link extraction instead of failing at import time.
 
 ## Installation Profiles & Validation
 
-- `pip install -e .` keeps the base install focused on Supabase/OpenAI/RAG tooling (Docling is still included for PDF/OCR flows).
+- `pip install -e .` keeps the base install focused on shared integrations.
 - Add extras as needed:
-  - `.[vision]` → Screen capture, OCR fallbacks, and keyboard hooks.
-  - `.[full]` → Vision extras plus Crawl4AI markdown filtering support.
+  - `.[server]` → FastAPI services + Docling/Tesseract/RapidOCR server stack.
+  - `.[vision-client]` → Screen capture, OCR fallbacks, and keyboard hooks.
+  - `.[easyocr]` → Optional EasyOCR add-on (may pull torch runtime).
+  - `.[full]` → Convenience profile for hosts that need both server + vision-client tooling.
 
 Use `study-agents-validate --groups openai,supabase,ollama` to fail fast when keys/URLs are missing. The command also ensures required directories exist and can print a short summary for deployment logs.
 
@@ -250,14 +265,18 @@ study-agents-manage validate --groups ollama
 Press `Ctrl+C` to stop every managed process gracefully.
 
 ## Vision Capture (Copilot UI or API)
-- UI: visit `http://<host>:3000`, use the Vision Capture card to set mode (`local`, `remote`, `remote_image`), monitor, and optional region, then click **Run capture**. Needs a display; on headless servers, use a virtual display (Xvfb) or run the UI on a desktop/WSLg host.
-- API: `POST http://<host>:9010/copilot/capture` with JSON like `{"monitor":1,"mode":"local","region":{"top":0,"left":0,"width":1200,"height":800}}`. For `remote_image`, set `remote_image_url` to `http://cag-service:8000/cag-ocr-answer`.
+- UI: visit `https://<domain>/`, use the Vision Capture card to set mode (`local`, `remote`, `remote_image`), monitor, and optional region, then click **Run capture**. Needs a display; on headless servers, use a virtual display (Xvfb) or run capture on a desktop/WSLg host.
+- API: `POST https://<domain>/copilot/capture` with JSON like `{"monitor":1,"mode":"local","region":{"top":0,"left":0,"width":1200,"height":800}}`. For `remote_image`, set `remote_image_url` to `https://<domain>/cag-ocr-answer`.
 
 ## Security Hardening
-- Set API keys for service access: `API_TOKEN` (CAG HTTP API) and `COPILOT_API_KEY` (Copilot service). Clients must send `X-API-Key` or `Authorization: Bearer <token>`.
-- Image uploads are size/type limited (`MAX_UPLOAD_BYTES`, PNG/JPEG only). Keep endpoints behind a reverse proxy with TLS and IP allowlists where possible.
-- Compose service ports are HTTP by default (`8000/8100/9010`); terminate TLS for any external/client-facing access.
+- Set API keys for service access: `API_TOKEN` (CAG), `RAG_API_TOKEN` (RAG builder), and `COPILOT_API_KEY` (Copilot). Clients send `X-API-Key` or `Authorization: Bearer <token>`.
+- APIs include basic in-memory throttling; tune with `API_RATE_LIMIT_PER_MINUTE`, `RAG_RATE_LIMIT_PER_MINUTE`, and `COPILOT_RATE_LIMIT_PER_MINUTE`.
+- Image uploads are size/type limited (`MAX_UPLOAD_BYTES`, PNG/JPEG only), and temporary OCR images can be auto-deleted with `DELETE_TEMP_IMAGES=true`.
+- File-processing endpoints are root-constrained. Configure allowlists via `RAG_ALLOWED_INPUT_ROOTS`, `RAG_ALLOWED_OUTPUT_ROOTS`, and `COPILOT_ALLOWED_FILE_ROOTS`.
+- Web crawling blocks localhost/private-network targets by default (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`) to reduce SSRF risk.
 - Containers drop root privileges (`USER app`). Bind only required ports; the default compose uses an internal `backend` network.
+- TLS is terminated on the machine via `tls-gateway` (Caddy). Point `PUBLIC_DOMAIN` DNS to the host and use `https://<domain>/...` from remote clients.
+- Keep direct service ports (`8000`, `8100`, `9010`) private; expose only the TLS gateway (`443`) for remote clients.
 - Vault (optional, OSS): a Vault dev service is included in compose. If `VAULT_ADDR`/`VAULT_TOKEN` are set, containers will attempt to fetch secrets from `kv/data/study-agents/*` via `scripts/use_env.sh` and render `/env/.env.runtime`. Default is dev/root token; replace with a secure Vault deployment for production.
 
 ## Testing
@@ -318,49 +337,8 @@ The script will:
 4. Stop/remove any stale project containers that might be holding ports 8000/8100.
 5. Run `docker compose up -d --build`.
 
-When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show the app services (`cag-service`, `rag-service`, `copilot-service`, `utility-service`) running.
+When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show `cag-service` and `rag-service` running.
 If Supabase’s official installer is unreachable, the script automatically falls back to downloading the latest CLI binary from GitHub releases as a fallback.
-
-## AWS EC2 Quick Start (Detailed)
-
-To match your current Hostinger profile on AWS, use:
-- Ubuntu 24.04 LTS (x86_64)
-- `t3.xlarge` (16 GiB RAM)
-- 200 GiB `gp3` disk
-
-Step-by-step:
-1. Launch EC2 + Elastic IP.
-2. Security Group:
-   - allow `22` from your admin IP
-   - allow `443` for client traffic
-   - keep `8000/8100/9010` restricted (admin-only or private)
-3. SSH in and clone:
-   ```bash
-   ssh -i /path/to/key.pem ubuntu@<EC2_PUBLIC_IP>
-   sudo apt-get update -y && sudo apt-get install -y git
-   cd /home/ubuntu
-   git clone git@github.com:pfenomanon/study-agents.git
-   cd study-agents/backend-vps
-   ```
-4. Configure env:
-   ```bash
-   cp .env.example .env
-   nano .env
-   ```
-5. Choose Supabase mode:
-   - Cloud: set hosted `SUPABASE_URL` + service-role `SUPABASE_KEY`
-   - Local Docker Supabase:
-     ```bash
-     chmod +x scripts/setup_local_supabase.sh
-     ./scripts/setup_local_supabase.sh
-     ```
-6. Start the app:
-   ```bash
-   docker compose up -d --build
-   docker compose ps
-   ```
-
-For the full AWS runbook (ops/security/validation), see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Rebuild the Bootstrap Bundle
 

@@ -50,6 +50,16 @@ import os
 print(os.environ.get("RESP",""))
 PY
 )}
+RAG_API_TOKEN=${RAG_API_TOKEN:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/rag-api-token" "value")" KEY=value python - <<'PY' 2>/dev/null || true
+import os
+print(os.environ.get("RESP",""))
+PY
+)}
+SCENARIO_API_KEY=${SCENARIO_API_KEY:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/scenario-api-key" "value")" KEY=value python - <<'PY' 2>/dev/null || true
+import os
+print(os.environ.get("RESP",""))
+PY
+)}
 
 cat >"$ENV_OUT" <<EOF
 OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -57,6 +67,8 @@ SUPABASE_URL=${SUPABASE_URL}
 SUPABASE_KEY=${SUPABASE_KEY}
 API_TOKEN=${API_TOKEN}
 COPILOT_API_KEY=${COPILOT_API_KEY}
+RAG_API_TOKEN=${RAG_API_TOKEN}
+SCENARIO_API_KEY=${SCENARIO_API_KEY}
 EOF
 
 set -a

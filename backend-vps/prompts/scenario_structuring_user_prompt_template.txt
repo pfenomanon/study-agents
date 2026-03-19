@@ -1,0 +1,8 @@
+Scenario ID: __SCENARIO_ID__
+Policy Type: __POLICY_TYPE__
+Peril: __PERIL__
+Carrier Type: __CARRIER_TYPE__
+Question: __QUESTION__
+Answer:
+__RAW_ANSWER__
+Produce the structured JSON.

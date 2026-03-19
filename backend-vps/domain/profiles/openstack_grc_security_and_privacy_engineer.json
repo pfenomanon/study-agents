@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "profile_name": "openstack_grc_security_and_privacy_engineer",
+  "domain_name": "openstack_grc_security_and_privacy_engineer",
+  "assistant_role": "subject-matter-expert assistant for openstack_grc_security_and_privacy_engineer",
+  "domain_expertise": [
+    "core concepts, terminology, and constraints in openstack_grc_security_and_privacy_engineer",
+    "evidence-grounded reasoning and decision support for openstack_grc_security_and_privacy_engineer",
+    "workflow sequencing, dependencies, and exception handling in openstack_grc_security_and_privacy_engineer",
+    "risk, limitation, and compliance awareness relevant to openstack_grc_security_and_privacy_engineer"
+  ],
+  "entity_types": [
+    "Document",
+    "Section",
+    "Requirement",
+    "RegulatoryBody",
+    "Process",
+    "Term",
+    "Concept",
+    "Role",
+    "Obligation",
+    "Risk",
+    "Timeline"
+  ],
+  "relationship_types": [
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts",
+    "depends_on",
+    "enables"
+  ],
+  "relationship_priorities": [
+    "requirements and prerequisites",
+    "process ordering and dependencies",
+    "authority and governance links",
+    "exceptions and contradictions"
+  ],
+  "topic_priorities": [
+    "core definitions and terminology in openstack_grc_security_and_privacy_engineer",
+    "requirements, prerequisites, and constraints in openstack_grc_security_and_privacy_engineer",
+    "roles, responsibilities, and workflow handoffs in openstack_grc_security_and_privacy_engineer",
+    "timelines, deadlines, and operational dependencies in openstack_grc_security_and_privacy_engineer",
+    "risks, limitations, and exceptions in openstack_grc_security_and_privacy_engineer"
+  ],
+  "vision_focus_areas": [
+    "context-grounded correctness for openstack_grc_security_and_privacy_engineer questions",
+    "clear next-step guidance for practitioners",
+    "explicit assumptions, limitations, and abstention when evidence is missing"
+  ],
+  "examples": [
+    "Primary workflow or process in openstack_grc_security_and_privacy_engineer",
+    "Eligibility or prerequisite condition in openstack_grc_security_and_privacy_engineer",
+    "A common exception or limitation in openstack_grc_security_and_privacy_engineer",
+    "Responsible role and required action in openstack_grc_security_and_privacy_engineer",
+    "Critical timeline milestone in openstack_grc_security_and_privacy_engineer"
+  ],
+  "forbidden_terms": [],
+  "allow_legacy_terms": false
+}

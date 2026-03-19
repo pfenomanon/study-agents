@@ -14,12 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml supabase_schema.sql README.md ./
+COPY pyproject.toml supabase_schema.sql README.md AGENTS_EXECUTION_PLAN.md COMMANDS_REFERENCE.md CAG_CHUNKING_STRATEGY.md ./ 
 COPY prompts ./prompts
 COPY src ./src
 COPY scripts/use_env.sh /app/use_env.sh
 RUN pip install --upgrade pip setuptools wheel
-RUN pip install -e .[full]
+RUN pip install -e .[server]
 RUN chmod +x /app/use_env.sh
 
 ENV PYTHONPATH="/app/src:${PYTHONPATH}"

@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "profile_name": "infrared_thermographer",
+  "domain_name": "infrared thermography (thermographer practice)",
+  "assistant_role": "subject-matter-expert assistant for infrared thermography practice, focused on evidence-grounded interpretation, reporting, and workflow guidance",
+  "domain_expertise": [
+    "infrared thermography fundamentals (radiation, emissivity, reflectivity, transmissivity) and measurement uncertainty",
+    "camera operation, calibration concepts, settings (focus, span/level, palettes), and field data capture best practices",
+    "inspection planning, safety, and workflow execution across common asset types (electrical, mechanical, building envelope) without assuming a specific industry",
+    "evidence-grounded interpretation and reporting: anomaly characterization, severity rationale, and traceable documentation",
+    "standards-aware practice (e.g., ISO/ASTM/IEC/NFPA where applicable), limitations, and compliance considerations",
+    "quality assurance: repeatability, environmental controls, and error sources (distance, angle, atmospheric effects)"
+  ],
+  "entity_types": [
+    "Asset",
+    "Component",
+    "Inspection",
+    "InspectionRoute",
+    "ThermalImage",
+    "VisualImage",
+    "Measurement",
+    "TemperatureDelta",
+    "EmissivitySetting",
+    "ReflectedApparentTemperature",
+    "AmbientCondition",
+    "Distance",
+    "AngleOfView",
+    "Camera",
+    "Lens",
+    "CalibrationRecord",
+    "Anomaly",
+    "Finding",
+    "Severity",
+    "Recommendation",
+    "CorrectiveAction",
+    "WorkOrder",
+    "Report",
+    "Standard",
+    "Procedure",
+    "SafetyHazard",
+    "PPE",
+    "Location",
+    "Timestamp",
+    "Material",
+    "LoadCondition"
+  ],
+  "relationship_types": [
+    "part_of",
+    "located_in",
+    "inspects",
+    "captures",
+    "measures",
+    "uses_setting",
+    "calibrated_by",
+    "observed_as",
+    "caused_by",
+    "correlates_with",
+    "requires",
+    "governed_by",
+    "mitigated_by",
+    "results_in",
+    "recommends",
+    "references"
+  ],
+  "relationship_priorities": [
+    "measurement settings and conditions linked to each image/measurement",
+    "findings linked to assets/components and supporting evidence (images, measurements, notes)",
+    "causal hypotheses linked to observable indicators and alternative explanations",
+    "standards/procedures and safety requirements linked to steps and outputs",
+    "recommendations linked to severity, risk, and required follow-up actions"
+  ],
+  "topic_priorities": [
+    "core thermography concepts and terminology (emissivity, reflected temperature, spot size, IFOV, NETD)",
+    "data capture workflow: planning, safety, camera setup, focus, and documentation",
+    "interpretation and triage: anomaly types, severity rationale, and uncertainty handling",
+    "reporting structure: required fields, traceability, and actionable recommendations",
+    "limitations and error sources: environmental effects, surface properties, reflections, and load dependence",
+    "quality control and repeat inspections: baselining, trending, and acceptance criteria when defined"
+  ],
+  "vision_focus_areas": [
+    "thermal image interpretation with explicit uncertainty and alternative explanations",
+    "detection of common artifacts (reflections, emissivity errors, focus/blur, saturation) and guidance to validate",
+    "report-ready evidence extraction: annotate regions of interest, measurements, and contextual metadata"
+  ],
+  "examples": [
+    "Given a thermal image and notes, extract: asset, component, location, load condition, emissivity, reflected temperature, key temperatures, delta-T, and a defensible finding statement.",
+    "Identify likely artifacts vs true heating in a thermal image (e.g., reflection from a shiny surface) and list validation steps (change angle, apply tape/paint target, capture visual photo).",
+    "Create an inspection checklist for an electrical panel route including safety steps, required metadata, and minimum photo set (thermal + visual).",
+    "Draft a concise report finding with severity rationale and recommendation, explicitly stating assumptions (emissivity estimate, load level) and limitations.",
+    "Map a finding to relevant standards/procedures (if provided) and flag missing required fields (calibration date, distance, ambient conditions).",
+    "Compare two inspections over time and summarize trend evidence, noting differences in load, ambient conditions, and camera settings that affect comparability."
+  ],
+  "forbidden_terms": [
+    "subject-matter-expert assistant"
+  ],
+  "allow_legacy_terms": true
+}

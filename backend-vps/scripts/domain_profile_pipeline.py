@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
+from urllib.robotparser import RobotFileParser
 
 import aiohttp
-
 try:
     from bs4 import BeautifulSoup
 except Exception:  # pragma: no cover
@@ -34,11 +34,20 @@ except Exception:  # pragma: no cover
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 
 PROFILES_DIR = ROOT / "domain" / "profiles"
 RESEARCH_DIR = ROOT / "domain" / "research"
 HELPER_FILE = ROOT / "domain" / "profile_name_template_helper.md"
 GENERIC_PROFILE = PROFILES_DIR / "generic.json"
+PROMPTS_DIR = ROOT / "prompts"
+
+PROFILE_BUILDER_SYSTEM_PROMPT = PROMPTS_DIR / "domain_profile_builder_system.txt"
+PROFILE_BUILDER_USER_TEMPLATE = PROMPTS_DIR / "domain_profile_builder_user_template.txt"
+RESEARCH_QUERY_TEMPLATE = PROMPTS_DIR / "domain_profile_research_query_template.txt"
 
 REQUIRED_PROFILE_KEYS = {
     "schema_version",
@@ -56,6 +65,143 @@ REQUIRED_PROFILE_KEYS = {
     "allow_legacy_terms",
 }
 
+ENTITY_TYPE_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)*$")
+RELATIONSHIP_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+
+ONTOLOGY_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "over",
+    "under",
+    "about",
+    "across",
+    "using",
+    "used",
+    "use",
+    "within",
+    "between",
+    "through",
+    "without",
+    "must",
+    "should",
+    "can",
+    "could",
+    "are",
+    "is",
+    "was",
+    "were",
+    "all",
+    "any",
+    "each",
+    "per",
+    "via",
+}
+
+GENERIC_ENTITY_BASELINE = {
+    "document",
+    "section",
+    "requirement",
+    "regulatorybody",
+    "process",
+    "term",
+    "concept",
+    "role",
+    "obligation",
+    "risk",
+    "timeline",
+}
+
+GENERIC_RELATIONSHIP_BASELINE = {
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts",
+    "depends_on",
+    "enables",
+}
+
+
+class PipelineCrawler:
+    """Minimal crawler for pipeline research without full web_research_agent deps."""
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int = 15,
+        user_agent: str = "StudyAgentsDomainProfileBot/1.0 (+https://example.local)",
+    ) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.user_agent = user_agent
+        self.session: aiohttp.ClientSession | None = None
+        self._robots_cache: dict[str, RobotFileParser] = {}
+
+    async def __aenter__(self) -> "PipelineCrawler":
+        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+        self.session = aiohttp.ClientSession(
+            timeout=timeout,
+            headers={"User-Agent": self.user_agent},
+        )
+        return self
+
+    async def __aexit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        if self.session is not None:
+            await self.session.close()
+            self.session = None
+
+    async def can_fetch(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = parsed.netloc
+        if not host:
+            return False
+
+        robots_url = f"{parsed.scheme}://{host}/robots.txt"
+        parser = self._robots_cache.get(robots_url)
+        if parser is None:
+            parser = RobotFileParser()
+            parser.set_url(robots_url)
+            try:
+                if self.session is None:
+                    return True
+                async with self.session.get(robots_url) as response:
+                    if response.status == 200:
+                        parser.parse((await response.text()).splitlines())
+                    else:
+                        parser = RobotFileParser()
+            except Exception:
+                parser = RobotFileParser()
+            self._robots_cache[robots_url] = parser
+        try:
+            return parser.can_fetch(self.user_agent, url)
+        except Exception:
+            return True
+
+    async def fetch_page(self, url: str) -> str | None:
+        if self.session is None:
+            raise RuntimeError("PipelineCrawler session is not initialized.")
+        if not await self.can_fetch(url):
+            return None
+
+        try:
+            async with self.session.get(url) as response:
+                if response.status != 200:
+                    return None
+                content_type = (response.headers.get("Content-Type") or "").lower()
+                if "text/html" not in content_type and "text/plain" not in content_type:
+                    return None
+                return await response.text(errors="ignore")
+        except Exception:
+            return None
+
 
 @dataclass
 class SourceRecord:
@@ -68,37 +214,6 @@ class SourceRecord:
     title: str
     snippet: str
     fetched_at: str
-
-
-class SimpleCrawler:
-    def __init__(self) -> None:
-        self.session: aiohttp.ClientSession | None = None
-
-    async def __aenter__(self) -> "SimpleCrawler":
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=25),
-            headers={"User-Agent": "DomainProfilePipeline/1.0"},
-        )
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        if self.session:
-            await self.session.close()
-        self.session = None
-
-    async def fetch_page(self, url: str) -> str | None:
-        if not self.session:
-            raise RuntimeError("SimpleCrawler session not initialized.")
-        try:
-            async with self.session.get(url) as response:
-                if response.status != 200:
-                    return None
-                try:
-                    return await response.text()
-                except UnicodeDecodeError:
-                    return await response.text(encoding="iso-8859-1")
-        except Exception:
-            return None
 
 
 def _load_env_file(path: Path) -> None:
@@ -163,7 +278,12 @@ def _clean_text(value: str) -> str:
     return text
 
 
-def _normalize_string_list(value: Any, fallback: list[str]) -> list[str]:
+def _normalize_string_list(
+    value: Any,
+    fallback: list[str],
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
     if isinstance(value, list):
         items = [str(v).strip() for v in value]
     elif isinstance(value, str):
@@ -171,6 +291,8 @@ def _normalize_string_list(value: Any, fallback: list[str]) -> list[str]:
     else:
         items = []
     cleaned = [_clean_text(v) for v in items if str(v).strip()]
+    if allow_empty and isinstance(value, (list, str)):
+        return cleaned
     return cleaned or list(fallback)
 
 
@@ -185,6 +307,24 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_required_text(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Required prompt/template file not found: {path}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Unable to read required prompt/template file: {path}") from exc
+    if not text:
+        raise RuntimeError(f"Required prompt/template file is empty: {path}")
+    return text
+
+
+def _default_research_query(domain: str) -> str:
+    template = _read_required_text(RESEARCH_QUERY_TEMPLATE)
+    query = template.replace("__DOMAIN__", domain).strip()
+    return query or f"{domain} standards regulations workflows terminology"
 
 
 def _authority_score(url: str) -> float:
@@ -299,7 +439,7 @@ def _extract_search_urls(html: str, max_results: int, search_domain: str) -> lis
 async def _search_web(query: str, max_results: int) -> list[str]:
     encoded = quote_plus(query)
     urls: list[str] = []
-    async with SimpleCrawler() as crawler:
+    async with PipelineCrawler() as crawler:
         brave = await crawler.fetch_page(f"https://search.brave.com/search?q={encoded}")
         if brave:
             urls = _extract_search_urls(brave, max_results=max_results, search_domain="brave.com")
@@ -308,6 +448,62 @@ async def _search_web(query: str, max_results: int) -> list[str]:
             if ddg:
                 urls = _extract_search_urls(ddg, max_results=max_results, search_domain="duckduckgo.com")
     return urls
+
+
+def _normalize_http_url(url: str) -> str | None:
+    if not url:
+        return None
+    normalized = url.strip()
+    if normalized.startswith("//"):
+        normalized = f"https:{normalized}"
+    if not normalized.startswith(("http://", "https://")):
+        return None
+    return normalized
+
+
+def _llms_candidate_urls(base_url: str) -> list[str]:
+    parsed = urlparse(base_url)
+    root = f"{parsed.scheme}://{parsed.netloc}"
+    return [
+        f"{root}/llms.md",
+        f"{root}/llms.txt",
+        f"{root}/.well-known/llms.md",
+        f"{root}/.well-known/llms.txt",
+        f"{root}/api/llms.md",
+        f"{root}/api/llms.txt",
+    ]
+
+
+def _is_llms_guide_url(url: str) -> bool:
+    lower = (url or "").lower()
+    return lower.endswith("/llms.md") or lower.endswith("/llms.txt")
+
+
+def _extract_urls_from_llms_guide(content: str, base_url: str) -> list[str]:
+    links: list[str] = []
+    seen: set[str] = set()
+
+    md_links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", content)
+    bare_urls = re.findall(r'https?://[^\s)\]">]+', content)
+    candidates = md_links + bare_urls
+
+    for raw in candidates:
+        candidate = (raw or "").strip()
+        if not candidate:
+            continue
+        if candidate.startswith("/"):
+            candidate = urljoin(base_url, candidate)
+        elif not candidate.startswith(("http://", "https://")):
+            candidate = urljoin(base_url, candidate)
+        normalized = _normalize_http_url(candidate)
+        if not normalized:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        links.append(normalized)
+
+    return links
 
 
 def _merge_profile(base_profile: dict[str, Any], candidate: dict[str, Any], profile_name: str) -> dict[str, Any]:
@@ -325,7 +521,11 @@ def _merge_profile(base_profile: dict[str, Any], candidate: dict[str, Any], prof
         "forbidden_terms",
     )
     for key in list_keys:
-        merged[key] = _normalize_string_list(merged.get(key), list(base_profile.get(key, [])))
+        merged[key] = _normalize_string_list(
+            merged.get(key),
+            list(base_profile.get(key, [])),
+            allow_empty=(key == "forbidden_terms"),
+        )
 
     for key in ("domain_name", "assistant_role"):
         merged[key] = _clean_text(str(merged.get(key, "") or base_profile.get(key, "")))
@@ -415,69 +615,6 @@ def _deterministic_profile(base_profile: dict[str, Any], profile_name: str, doma
         f"Critical timeline milestone in {domain}",
     ]
 
-    domain_lower = domain.lower()
-    if "adjuster" in domain_lower and "auto" in domain_lower:
-        profile["assistant_role"] = (
-            "subject-matter-expert assistant for Texas auto independent adjusting workflows"
-        )
-        profile["domain_expertise"] = [
-            "Texas auto claim coverage interpretation and policy condition analysis",
-            "independent adjuster workflows for intake, inspection, estimate, and settlement support",
-            "liability, damages, comparative responsibility, and claim decision rationale",
-            "regulatory and carrier workflow obligations, timelines, and documentation quality",
-        ]
-        profile["entity_types"] = [
-            "Document",
-            "Section",
-            "Requirement",
-            "RegulatoryBody",
-            "Process",
-            "Term",
-            "CoverageForm",
-            "PolicyFeature",
-            "Party",
-            "Vehicle",
-            "DamageType",
-            "EstimateLineItem",
-            "Obligation",
-            "Risk",
-            "Timeline",
-            "ClaimEvent",
-            "EvidenceItem",
-        ]
-        profile["relationship_types"] = [
-            "governs",
-            "requires",
-            "defines",
-            "part_of",
-            "references",
-            "contradicts",
-            "depends_on",
-            "supports",
-            "excludes",
-        ]
-        profile["topic_priorities"] = [
-            "coverage triggers, limits, exclusions, and conditions for auto claims",
-            "liability determination factors and comparative responsibility",
-            "inspection, estimate, repair, and settlement workflow requirements",
-            "documentation completeness, evidence quality, and discrepancy handling",
-            "regulatory, carrier, and deadline compliance for claim handling",
-        ]
-        profile["vision_focus_areas"] = [
-            "grounded interpretation of policy/claim artifacts in screenshots",
-            "clear adjuster next-step recommendations and required documentation",
-            "explicit uncertainty when evidence is incomplete or conflicting",
-        ]
-        profile["examples"] = [
-            "Coverage determination for collision vs comprehensive",
-            "Liability assessment with conflicting witness statements",
-            "Estimate line-item validation against documented damage",
-            "Documentation checklist for settlement recommendation",
-            "Timeline checkpoint for acknowledgment, inspection, and payment communication",
-        ]
-        profile["forbidden_terms"] = []
-        profile["allow_legacy_terms"] = True
-
     return _merge_profile(base_profile, profile, profile_name)
 
 
@@ -509,6 +646,25 @@ def _build_openai_client() -> Any:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set.")
     return OpenAI(api_key=api_key)
+
+
+def _render_profile_builder_user_prompt(
+    *,
+    profile_name: str,
+    domain: str,
+    helper_text: str,
+    base_profile: dict[str, Any],
+    source_summaries: list[dict[str, Any]],
+) -> str:
+    template = _read_required_text(PROFILE_BUILDER_USER_TEMPLATE)
+    return (
+        template
+        .replace("__PROFILE_NAME__", profile_name)
+        .replace("__DOMAIN__", domain)
+        .replace("__HELPER_TEXT__", helper_text)
+        .replace("__BASE_PROFILE_JSON__", json.dumps(base_profile, indent=2))
+        .replace("__SOURCE_SUMMARIES_JSON__", json.dumps(source_summaries, indent=2))
+    )
 
 
 def _summarize_sources(sources: list[SourceRecord], max_sources: int = 12) -> list[dict[str, Any]]:
@@ -543,40 +699,15 @@ def _generate_profile_with_openai(
     source_summaries: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     client = _build_openai_client()
-    system_msg = (
-        "You are a senior domain modeling architect. "
-        "Create a profile JSON for retrieval, graph extraction, and grounded QA. "
-        "Return strict JSON only."
+    system_msg = _read_required_text(PROFILE_BUILDER_SYSTEM_PROMPT)
+    user_msg = _render_profile_builder_user_prompt(
+        profile_name=profile_name,
+        domain=domain,
+        helper_text=helper_text,
+        base_profile=base_profile,
+        source_summaries=source_summaries,
     )
-    user_msg = (
-        "Build a domain profile JSON from research evidence.\n"
-        "Output exactly this JSON shape:\n"
-        "{\n"
-        '  "profile": { ... required schema ... },\n'
-        '  "field_evidence": {\n'
-        '    "domain_expertise": ["S1"],\n'
-        '    "entity_types": ["S1"],\n'
-        '    "relationship_types": ["S1"],\n'
-        '    "relationship_priorities": ["S1"],\n'
-        '    "topic_priorities": ["S1"],\n'
-        '    "vision_focus_areas": ["S1"],\n'
-        '    "examples": ["S1"]\n'
-        "  }\n"
-        "}\n\n"
-        f"profile_name: {profile_name}\n"
-        f"domain: {domain}\n\n"
-        "Profile helper guidance:\n"
-        f"{helper_text}\n\n"
-        "Baseline generic profile:\n"
-        f"{json.dumps(base_profile, indent=2)}\n\n"
-        "Research evidence summary:\n"
-        f"{json.dumps(source_summaries, indent=2)}\n\n"
-        "Rules:\n"
-        "- Keep required keys complete.\n"
-        "- Use domain-specific values supported by evidence.\n"
-        "- Do not output markdown.\n"
-        "- Do not use phrase 'exam helper'.\n"
-    )
+
     completion = client.chat.completions.create(
         model=model,
         temperature=0.2,
@@ -595,6 +726,45 @@ def _generate_profile_with_openai(
         field_evidence = {}
     merged = _merge_profile(base_profile, profile_raw, profile_name)
     return merged, field_evidence
+
+
+def _resolve_pipeline_runtime(
+    platform: str | None,
+    model: str | None,
+) -> dict[str, str]:
+    platform_raw = (platform or "").strip().lower()
+    model_raw = (model or "").strip()
+
+    if not platform_raw:
+        platform_raw = (
+            os.getenv("DOMAIN_PROFILE_PIPELINE_PLATFORM", "").strip().lower()
+            or os.getenv("REASON_PLATFORM", "").strip().lower()
+            or "openai"
+        )
+
+    if platform_raw not in {"openai", "ollama"}:
+        raise RuntimeError("Invalid platform. Expected 'openai' or 'ollama'.")
+
+    if not model_raw:
+        model_raw = (
+            os.getenv("DOMAIN_PROFILE_PIPELINE_MODEL", "").strip()
+            or os.getenv("OPENAI_REASON_MODEL", "").strip()
+            or os.getenv("OPENAI_CHAT_MODEL", "").strip()
+            or os.getenv("REASON_MODEL", "").strip()
+            or "gpt-4o-mini"
+        )
+
+    if platform_raw == "openai" and ":" in model_raw:
+        model_raw = (
+            os.getenv("OPENAI_REASON_MODEL", "").strip()
+            or os.getenv("OPENAI_CHAT_MODEL", "").strip()
+            or "gpt-4o-mini"
+        )
+
+    return {
+        "platform": platform_raw,
+        "model": model_raw,
+    }
 
 
 def _source_metrics(sources: list[SourceRecord]) -> dict[str, Any]:
@@ -643,6 +813,205 @@ def _validate_field_evidence(
     return errors
 
 
+def _ontology_label_tokens(label: str) -> list[str]:
+    expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", label)
+    expanded = expanded.replace("_", " ").replace("-", " ")
+    tokens = [tok.lower() for tok in re.findall(r"[A-Za-z0-9]{3,}", expanded)]
+    return [tok for tok in tokens if tok not in ONTOLOGY_STOPWORDS]
+
+
+def _collect_domain_tokens(domain: str, source_summaries: list[dict[str, Any]]) -> set[str]:
+    chunks = [domain]
+    for src in source_summaries[:12]:
+        chunks.append(str(src.get("title") or ""))
+        chunks.append(str(src.get("snippet") or "")[:500])
+    tokens = {
+        tok.lower()
+        for tok in re.findall(r"[A-Za-z0-9]{3,}", "\n".join(chunks))
+        if tok
+    }
+    return {tok for tok in tokens if tok not in ONTOLOGY_STOPWORDS}
+
+
+def _token_grounded_in_domain(token: str, domain_tokens: set[str]) -> bool:
+    tok = token.lower().strip()
+    if not tok:
+        return False
+    if tok in domain_tokens:
+        return True
+    # Light stemming: implementation <-> implements, controls <-> control, evidenced <-> evidence.
+    suffixes = ("ing", "ed", "es", "s", "tion", "ions", "ment", "ments", "ity", "ities")
+    roots = {tok}
+    for suffix in suffixes:
+        if tok.endswith(suffix) and len(tok) - len(suffix) >= 4:
+            roots.add(tok[: -len(suffix)])
+    for root in list(roots):
+        if root in domain_tokens:
+            return True
+    # Prefix similarity for domain compounds.
+    for dtok in domain_tokens:
+        if len(tok) >= 5 and len(dtok) >= 5 and (tok.startswith(dtok[:5]) or dtok.startswith(tok[:5])):
+            return True
+    return False
+
+
+def _validate_ontology_quality(
+    *,
+    profile: dict[str, Any],
+    base_profile: dict[str, Any],
+    domain: str,
+    source_summaries: list[dict[str, Any]],
+) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+
+    entity_types = [str(x).strip() for x in profile.get("entity_types", []) if str(x).strip()]
+    relationship_types = [
+        str(x).strip() for x in profile.get("relationship_types", []) if str(x).strip()
+    ]
+    relationship_priorities = [
+        str(x).strip() for x in profile.get("relationship_priorities", []) if str(x).strip()
+    ]
+
+    base_entities = {
+        str(x).strip().lower()
+        for x in base_profile.get("entity_types", [])
+        if str(x).strip()
+    }
+    base_relationships = {
+        str(x).strip().lower()
+        for x in base_profile.get("relationship_types", [])
+        if str(x).strip()
+    }
+    base_priorities = [
+        str(x).strip().lower()
+        for x in base_profile.get("relationship_priorities", [])
+        if str(x).strip()
+    ]
+
+    entity_lower = [x.lower() for x in entity_types]
+    relationship_lower = [x.lower() for x in relationship_types]
+
+    entity_overlap_ratio = len(set(entity_lower) & base_entities) / max(1, len(set(entity_lower)))
+    relationship_overlap_ratio = len(set(relationship_lower) & base_relationships) / max(
+        1, len(set(relationship_lower))
+    )
+
+    novel_entity_types = [x for x in entity_types if x.lower() not in base_entities]
+    novel_relationship_types = [x for x in relationship_types if x.lower() not in base_relationships]
+
+    domain_tokens = _collect_domain_tokens(domain, source_summaries)
+    novel_entity_grounded = sum(
+        1
+        for label in novel_entity_types
+        if any(_token_grounded_in_domain(tok, domain_tokens) for tok in _ontology_label_tokens(label))
+    )
+    novel_relationship_grounded = sum(
+        1
+        for label in novel_relationship_types
+        if any(_token_grounded_in_domain(tok, domain_tokens) for tok in _ontology_label_tokens(label))
+    )
+
+    invalid_entity_format = [
+        label for label in entity_types if not ENTITY_TYPE_PATTERN.fullmatch(label)
+    ]
+    invalid_relationship_format = [
+        label
+        for label in relationship_types
+        if not RELATIONSHIP_TYPE_PATTERN.fullmatch(label)
+    ]
+
+    if entity_overlap_ratio > 0.60:
+        errors.append(
+            "entity_types overlap too much with generic baseline "
+            f"({entity_overlap_ratio:.2f} > 0.60)."
+        )
+    if relationship_overlap_ratio > 0.60:
+        errors.append(
+            "relationship_types overlap too much with generic baseline "
+            f"({relationship_overlap_ratio:.2f} > 0.60)."
+        )
+
+    min_novel_entity = max(2, len(entity_types) // 3)
+    min_novel_relationship = max(2, len(relationship_types) // 3)
+    if len(novel_entity_types) < min_novel_entity:
+        errors.append(
+            f"entity_types include too few domain-native labels: {len(novel_entity_types)} < {min_novel_entity}."
+        )
+    if len(novel_relationship_types) < min_novel_relationship:
+        errors.append(
+            "relationship_types include too few domain-native labels: "
+            f"{len(novel_relationship_types)} < {min_novel_relationship}."
+        )
+
+    if novel_entity_types and (novel_entity_grounded / max(1, len(novel_entity_types))) < 0.50:
+        errors.append(
+            "entity_types are not sufficiently grounded in domain/source terms "
+            f"({novel_entity_grounded}/{len(novel_entity_types)} grounded)."
+        )
+    if novel_relationship_types and (
+        novel_relationship_grounded / max(1, len(novel_relationship_types))
+    ) < 0.50:
+        errors.append(
+            "relationship_types are not sufficiently grounded in domain/source terms "
+            f"({novel_relationship_grounded}/{len(novel_relationship_types)} grounded)."
+        )
+
+    if invalid_entity_format:
+        errors.append(
+            "entity_types must be PascalCase labels (invalid: "
+            + ", ".join(invalid_entity_format[:8])
+            + ")."
+        )
+    if invalid_relationship_format:
+        errors.append(
+            "relationship_types must be snake_case verb labels (invalid: "
+            + ", ".join(invalid_relationship_format[:8])
+            + ")."
+        )
+
+    generic_entity_count = sum(1 for label in entity_lower if label in GENERIC_ENTITY_BASELINE)
+    generic_relationship_count = sum(
+        1 for label in relationship_lower if label in GENERIC_RELATIONSHIP_BASELINE
+    )
+    if generic_entity_count > max(2, len(entity_types) // 2):
+        errors.append(
+            "entity_types remain overly generic "
+            f"({generic_entity_count}/{len(entity_types)} generic labels)."
+        )
+    if generic_relationship_count > max(2, len(relationship_types) // 2):
+        errors.append(
+            "relationship_types remain overly generic "
+            f"({generic_relationship_count}/{len(relationship_types)} generic labels)."
+        )
+
+    prio_lower = [p.lower() for p in relationship_priorities]
+    if prio_lower == base_priorities:
+        errors.append("relationship_priorities remained unchanged from generic baseline.")
+    if relationship_priorities:
+        grounded_prio = sum(
+            1
+            for item in relationship_priorities
+            if any(_token_grounded_in_domain(tok, domain_tokens) for tok in _ontology_label_tokens(item))
+        )
+        if grounded_prio == 0:
+            errors.append("relationship_priorities must include domain-specific wording.")
+
+    metrics = {
+        "entity_overlap_ratio": round(entity_overlap_ratio, 3),
+        "relationship_overlap_ratio": round(relationship_overlap_ratio, 3),
+        "entity_count": len(entity_types),
+        "relationship_count": len(relationship_types),
+        "novel_entity_count": len(novel_entity_types),
+        "novel_relationship_count": len(novel_relationship_types),
+        "novel_entity_grounded_count": novel_entity_grounded,
+        "novel_relationship_grounded_count": novel_relationship_grounded,
+        "generic_entity_count": generic_entity_count,
+        "generic_relationship_count": generic_relationship_count,
+        "domain_token_count": len(domain_tokens),
+    }
+    return errors, metrics
+
+
 def _research_ready(
     metrics: dict[str, Any],
     *,
@@ -673,29 +1042,54 @@ async def _research_pass(
     max_results: int,
     fetch_limit: int,
 ) -> list[SourceRecord]:
-    urls = []
+    urls: list[str] = []
     seen: set[str] = set()
+
     for url in seed_urls:
-        if url.startswith("http") and url not in seen:
-            seen.add(url)
-            urls.append(url)
+        normalized = _normalize_http_url(url)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            urls.append(normalized)
+
     discovered = await _search_web(query, max_results=max_results)
     for url in discovered:
-        if url.startswith("http") and url not in seen:
-            seen.add(url)
-            urls.append(url)
+        normalized = _normalize_http_url(url)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            urls.append(normalized)
 
-    sources: list[SourceRecord] = []
+    # Add llms.* guide candidates per discovered/seed domain.
+    llms_candidates: list[str] = []
+    for url in list(urls):
+        for llms_url in _llms_candidate_urls(url):
+            if llms_url not in seen:
+                seen.add(llms_url)
+                llms_candidates.append(llms_url)
+
     query_terms = [t for t in re.split(r"[^a-zA-Z0-9]+", query.lower()) if len(t) > 2]
-    async with SimpleCrawler() as crawler:
+    sources: list[SourceRecord] = []
+
+    async with PipelineCrawler() as crawler:
+        # Discover additional URLs from llms guides first.
+        for llms_url in llms_candidates:
+            content = await crawler.fetch_page(llms_url)
+            if not content:
+                continue
+            for extra_url in _extract_urls_from_llms_guide(content, llms_url):
+                if extra_url not in seen:
+                    seen.add(extra_url)
+                    urls.append(extra_url)
+
         source_num = 1
-        for url in urls[: max_results * 2]:
+        for url in urls[: max_results * 4]:
             html = await crawler.fetch_page(url)
             if not html:
                 continue
+            is_llms_doc = _is_llms_guide_url(url)
             title, snippet = _extract_title_and_snippet(html)
-            if len(snippet) < 300:
+            if len(snippet) < (80 if is_llms_doc else 300):
                 continue
+
             authority = _authority_score(url)
             keyword = _keyword_score(f"{title}\n{snippet}", query_terms)
             relevance = round((authority * 0.45) + (keyword * 0.55), 3)
@@ -714,6 +1108,7 @@ async def _research_pass(
                 )
             )
             source_num += 1
+
     ranked = sorted(
         sources,
         key=lambda s: (s.relevance_score, s.authority_score, s.keyword_score),
@@ -790,7 +1185,7 @@ async def run_pipeline(args: argparse.Namespace) -> int:
     seed_urls = _default_seed_urls(domain) + list(args.seed_urls or [])
     all_sources: list[SourceRecord] = []
     query_runs: list[dict[str, Any]] = []
-    query = args.research_query or f"{domain} standards regulations workflows terminology"
+    query = args.research_query or _default_research_query(domain)
 
     for pass_num in range(1, args.max_research_passes + 1):
         print(f"[research] pass={pass_num} query={query}")
@@ -800,7 +1195,6 @@ async def run_pipeline(args: argparse.Namespace) -> int:
             max_results=args.max_sources,
             fetch_limit=args.max_snippet_chars,
         )
-        # Deduplicate by URL while preserving best relevance.
         by_url: dict[str, SourceRecord] = {src.url: src for src in all_sources}
         for src in pass_sources:
             existing = by_url.get(src.url)
@@ -847,28 +1241,50 @@ async def run_pipeline(args: argparse.Namespace) -> int:
         min_domains=args.min_unique_domains,
     )
 
+    if args.enforce_research_ready and not ready:
+        print(
+            "[research error] Research quality gates not met: "
+            + "; ".join(reasons),
+            file=sys.stderr,
+        )
+        return 1
+
+    runtime = _resolve_pipeline_runtime(args.platform, args.model)
+
     field_evidence: dict[str, Any] = {}
     evidence_errors: list[str] = []
+    ontology_errors: list[str] = []
+    ontology_metrics: dict[str, Any] = {}
     used_ai = False
     ai_error = ""
     profile = _deterministic_profile(base_profile, profile_name, domain)
     if args.use_ai:
-        try:
-            profile, field_evidence = _generate_profile_with_openai(
-                model=args.model,
-                profile_name=profile_name,
-                domain=domain,
-                base_profile=profile,
-                helper_text=helper_text,
-                source_summaries=summary_sources,
+        if runtime["platform"] != "openai":
+            ai_error = (
+                "Profile generation currently supports platform=openai only. "
+                f"Received platform={runtime['platform']}."
             )
-            used_ai = True
-        except Exception as exc:  # noqa: BLE001
-            ai_error = str(exc)
             if args.no_ai_fallback:
                 print(f"[ai error] {ai_error}", file=sys.stderr)
                 return 1
-            print(f"[ai warn] {ai_error}. Falling back to deterministic profile.")
+            print(f"[ai warn] {ai_error} Falling back to deterministic profile.")
+        else:
+            try:
+                profile, field_evidence = _generate_profile_with_openai(
+                    model=runtime["model"],
+                    profile_name=profile_name,
+                    domain=domain,
+                    base_profile=profile,
+                    helper_text=helper_text,
+                    source_summaries=summary_sources,
+                )
+                used_ai = True
+            except Exception as exc:  # noqa: BLE001
+                ai_error = str(exc)
+                if args.no_ai_fallback:
+                    print(f"[ai error] {ai_error}", file=sys.stderr)
+                    return 1
+                print(f"[ai warn] {ai_error}. Falling back to deterministic profile.")
 
     if used_ai:
         valid_source_ids = {src["source_id"] for src in summary_sources}
@@ -885,6 +1301,24 @@ async def run_pipeline(args: argparse.Namespace) -> int:
             used_ai = False
             field_evidence = {}
             profile = _deterministic_profile(base_profile, profile_name, domain)
+
+    if args.enforce_ontology_quality:
+        ontology_errors, ontology_metrics = _validate_ontology_quality(
+            profile=profile,
+            base_profile=base_profile,
+            domain=domain,
+            source_summaries=summary_sources,
+        )
+        if args.use_ai and not used_ai:
+            ontology_errors.append(
+                "AI profile generation is required when ontology quality enforcement is enabled. "
+                "Disable with --no-enforce-ontology-quality only for draft flows."
+            )
+        if ontology_errors:
+            print("[ontology error] ontology quality validation failed:", file=sys.stderr)
+            for err in ontology_errors:
+                print(f"  - {err}", file=sys.stderr)
+            return 1
 
     profile_errors = _validate_profile(profile)
     if profile_errors:
@@ -916,12 +1350,16 @@ async def run_pipeline(args: argparse.Namespace) -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "profile_path": str(profile_path),
         "used_ai": used_ai,
+        "runtime": runtime,
         "ai_error": ai_error,
         "profile_validation_errors": profile_errors,
         "wizard_check_ok": wizard_ok,
         "wizard_check_output": wizard_output,
         "field_evidence": field_evidence,
         "field_evidence_errors": evidence_errors,
+        "ontology_quality_enforced": bool(args.enforce_ontology_quality),
+        "ontology_quality_errors": ontology_errors,
+        "ontology_quality_metrics": ontology_metrics,
     }
     _write_json(validation_path, validation)
 
@@ -931,6 +1369,8 @@ async def run_pipeline(args: argparse.Namespace) -> int:
         f"- Generated at: {datetime.now(timezone.utc).isoformat()}",
         f"- Domain: {domain}",
         f"- Used AI profile generation: {used_ai}",
+        f"- Ontology quality enforcement: {bool(args.enforce_ontology_quality)}",
+        f"- Ontology quality check: {'PASS' if not ontology_errors else 'FAIL'}",
         f"- Research ready: {ready}",
         f"- Research gaps: {', '.join(reasons) if reasons else 'none'}",
         f"- Wizard check: {'PASS' if wizard_ok else 'FAIL'}",
@@ -945,6 +1385,12 @@ async def run_pipeline(args: argparse.Namespace) -> int:
         f"- Profile JSON: `{profile_path}`",
         f"- Dossier JSON: `{dossier_path}`",
         f"- Validation JSON: `{validation_path}`",
+        "",
+        "## Ontology Quality",
+        f"- Entity overlap ratio: {ontology_metrics.get('entity_overlap_ratio', 'n/a')}",
+        f"- Relationship overlap ratio: {ontology_metrics.get('relationship_overlap_ratio', 'n/a')}",
+        f"- Novel entity labels: {ontology_metrics.get('novel_entity_count', 'n/a')}",
+        f"- Novel relationship labels: {ontology_metrics.get('novel_relationship_count', 'n/a')}",
         "",
         "## Top Sources",
     ]
@@ -970,9 +1416,9 @@ async def run_pipeline(args: argparse.Namespace) -> int:
                 [
                     "--use-ai",
                     "--platform",
-                    args.platform,
+                    runtime["platform"],
                     "--model",
-                    args.model,
+                    runtime["model"],
                 ]
             )
         proc = subprocess.run(
@@ -995,7 +1441,7 @@ async def run_pipeline(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Research-driven domain profile pipeline using helper-guided JSON generation."
+        description="Research-driven domain profile pipeline using helper-guided JSON generation.",
     )
     parser.add_argument("--profile-name", required=True, help="Profile name slug.")
     parser.add_argument("--domain", default=None, help="Domain phrase.")
@@ -1013,16 +1459,47 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-sources", type=int, default=6)
     parser.add_argument("--min-authoritative-sources", type=int, default=3)
     parser.add_argument("--min-unique-domains", type=int, default=4)
-    parser.add_argument("--use-ai", action="store_true")
-    parser.add_argument("--platform", choices=["openai"], default="openai")
-    parser.add_argument("--model", default="gpt-5.2")
+    parser.add_argument(
+        "--use-ai",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable AI profile generation (default: true).",
+    )
+    parser.add_argument(
+        "--platform",
+        default=None,
+        help=(
+            "AI runtime platform override for profile generation and wizard apply/check "
+            "(openai or ollama)."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="AI model override for profile generation and wizard apply/check.",
+    )
     parser.add_argument("--no-ai-fallback", action="store_true")
     parser.add_argument("--env-file", default=None)
+    parser.add_argument(
+        "--enforce-research-ready",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fail the run if research readiness gates are not met (default: true).",
+    )
     parser.add_argument(
         "--generate-prompts",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Run domain_wizard apply/check after profile generation (default: true).",
+    )
+    parser.add_argument(
+        "--enforce-ontology-quality",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Reject profiles whose ontology remains generic or weakly domain-grounded "
+            "(default: true)."
+        ),
     )
     return parser.parse_args()
 

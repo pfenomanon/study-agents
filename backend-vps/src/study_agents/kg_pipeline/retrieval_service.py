@@ -61,7 +61,7 @@ class HybridRetrievalService:
         start = time.perf_counter()
         match_count = match_count or self.config.max_context_documents
 
-        documents = self._semantic_search(question, match_count)
+        documents = self._semantic_search(question, match_count, filters=filters)
         graph_nodes: list[dict[str, Any]] = []
         graph_edges: list[dict[str, Any]] = []
         if include_graph and documents:
@@ -86,21 +86,42 @@ class HybridRetrievalService:
         )
 
     # ------------------------------------------------------------------ #
-    def _semantic_search(self, question: str, match_count: int) -> List[RetrievalDocument]:
+    def _semantic_search(self, question: str, match_count: int, filters: Optional[Dict[str, Any]] = None) -> List[RetrievalDocument]:
         query_embedding = self._embed_query(question)
-        payload = {
+        base_payload = {
             "query_embedding": query_embedding,
             "match_threshold": self.config.match_threshold,
             "match_count": match_count,
+        }
+        # Optional group/profile filtering. Include both keys explicitly to avoid
+        # RPC overloading ambiguity when both legacy and profile-aware SQL
+        # signatures exist in the same database.
+        grp = None
+        profile_id = None
+        if filters:
+            grp = filters.get("group_prefix") or filters.get("group_id") or filters.get("group")
+            profile_id = filters.get("profile_id") or filters.get("profile")
+        payload = {
+            **base_payload,
+            "group_prefix": grp,
+            "profile_filter": profile_id,
         }
         logger.debug(
             "Invoking Supabase RPC %s (match_count=%s)",
             self.config.match_documents_fn,
             match_count,
         )
-        response = (
-            self.graph_store.client.rpc(self.config.match_documents_fn, payload).execute()
-        )
+        try:
+            response = (
+                self.graph_store.client.rpc(self.config.match_documents_fn, payload).execute()
+            )
+        except Exception as exc:
+            if grp is None and profile_id is None and self._is_match_documents_signature_error(exc):
+                response = (
+                    self.graph_store.client.rpc(self.config.match_documents_fn, base_payload).execute()
+                )
+            else:
+                raise
         rows = response.data or []
         return [
             RetrievalDocument(
@@ -111,6 +132,13 @@ class HybridRetrievalService:
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _is_match_documents_signature_error(exc: Exception) -> bool:
+        message = str(exc)
+        if "match_documents" not in message:
+            return False
+        return "PGRST203" in message or "PGRST202" in message
 
     def _expand_graph(
         self, documents: List[RetrievalDocument], max_neighbors: int = 20

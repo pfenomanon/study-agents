@@ -1,0 +1,11 @@
+Context from knowledge base:
+__CONTEXT__
+
+Question: __QUESTION__
+
+Instructions:
+- First check if the answer is in the context
+- If not supported by context, abstain and state context is insufficient
+- For multiple choice, select only when context supports the option
+
+Answer:

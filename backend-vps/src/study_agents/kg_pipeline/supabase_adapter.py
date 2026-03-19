@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
-from supabase import Client
+if TYPE_CHECKING:
+    from supabase import Client
+else:  # pragma: no cover - runtime typing fallback
+    Client = Any
 
 from .config import IngestionConfig
 from .models import EpisodeChunk, GraphEdgeCandidate, GraphNodeCandidate
@@ -27,11 +30,20 @@ class SupabaseGraphStore:
             url=config.supabase_url, key=config.supabase_key
         )
         self._edges_support_group = True
+        self._edges_support_profile = True
+        self._docs_support_profile = True
+        self._nodes_support_profile = True
+        self._episodes_support_profile = True
 
     # ------------------------------------------------------------------ #
     # Document helpers
     # ------------------------------------------------------------------ #
-    def upsert_documents(self, chunks: Iterable[EpisodeChunk]) -> int:
+    def upsert_documents(
+        self,
+        chunks: Iterable[EpisodeChunk],
+        group_id: str | None = None,
+        profile_id: str | None = None,
+    ) -> int:
         records = []
         for chunk in chunks:
             record = {
@@ -40,6 +52,10 @@ class SupabaseGraphStore:
                 "meta": chunk.metadata,
                 "embedding": chunk.embedding,
             }
+            if group_id:
+                record["group_id"] = group_id
+            if profile_id and self._docs_support_profile:
+                record["profile_id"] = profile_id
             records.append(record)
 
         if not records:
@@ -48,7 +64,24 @@ class SupabaseGraphStore:
         logger.debug(
             "Upserting %s documents into %s", len(records), self.config.documents_table
         )
-        self.client.table(self.config.documents_table).upsert(records).execute()
+        try:
+            self.client.table(self.config.documents_table).upsert(records).execute()
+        except Exception as exc:  # pragma: no cover - tolerate older schemas
+            msg = str(exc)
+            if "group_id" in msg and "column" in msg:
+                # Retry without group_id if the column doesn't exist in the schema
+                for r in records:
+                    r.pop("group_id", None)
+                logger.warning("documents.group_id column not found; retrying without it.")
+                self.client.table(self.config.documents_table).upsert(records).execute()
+            elif "profile_id" in msg and "column" in msg:
+                for r in records:
+                    r.pop("profile_id", None)
+                self._docs_support_profile = False
+                logger.warning("documents.profile_id column not found; retrying without it.")
+                self.client.table(self.config.documents_table).upsert(records).execute()
+            else:
+                raise
         return len(records)
 
     # ------------------------------------------------------------------ #
@@ -66,13 +99,36 @@ class SupabaseGraphStore:
                 "group_id": node.group_id,
                 "attrs": node.attrs,
             }
-            self.client.table(self.config.nodes_table).upsert(record).execute()
+            if node.profile_id and self._nodes_support_profile:
+                record["profile_id"] = node.profile_id
+            try:
+                self.client.table(self.config.nodes_table).upsert(record).execute()
+            except Exception as exc:
+                message = str(exc)
+                if (
+                    self._nodes_support_profile
+                    and "profile_id" in message
+                    and "column" in message
+                ):
+                    self._nodes_support_profile = False
+                    record.pop("profile_id", None)
+                    logger.warning(
+                        "kg_nodes.profile_id column not found; retrying without it."
+                    )
+                    self.client.table(self.config.nodes_table).upsert(record).execute()
+                else:
+                    raise
             inserted += 1
         if inserted:
             logger.debug("Inserted %s new nodes", inserted)
         return inserted
 
-    def upsert_edges(self, edges: Sequence[GraphEdgeCandidate], group_id: str) -> int:
+    def upsert_edges(
+        self,
+        edges: Sequence[GraphEdgeCandidate],
+        group_id: str,
+        profile_id: str | None = None,
+    ) -> int:
         inserted = 0
         for edge in edges:
             if self._edge_exists(edge.src, edge.dst, edge.rel):
@@ -87,6 +143,8 @@ class SupabaseGraphStore:
             }
             if self._edges_support_group:
                 record["group_id"] = group_id
+            if (edge.profile_id or profile_id) and self._edges_support_profile:
+                record["profile_id"] = edge.profile_id or profile_id
             try:
                 self.client.table(self.config.edges_table).insert(record).execute()
             except Exception as exc:
@@ -103,6 +161,18 @@ class SupabaseGraphStore:
                     self._edges_support_group = False
                     record.pop("group_id", None)
                     self.client.table(self.config.edges_table).insert(record).execute()
+                elif (
+                    self._edges_support_profile
+                    and "profile_id" in message
+                    and "column" in message
+                ):
+                    logger.warning(
+                        "kg_edges.profile_id column not found; retrying without it. "
+                        "Run the latest supabase_schema.sql to add the column permanently."
+                    )
+                    self._edges_support_profile = False
+                    record.pop("profile_id", None)
+                    self.client.table(self.config.edges_table).insert(record).execute()
                 else:
                     raise
             inserted += 1
@@ -118,7 +188,24 @@ class SupabaseGraphStore:
             logger.debug("episodes_table not configured; skipping episode log")
             return
         logger.debug("Recording episode %s", payload.get("episode_id"))
-        self.client.table(self.config.episodes_table).upsert(payload).execute()
+        record = dict(payload)
+        try:
+            self.client.table(self.config.episodes_table).upsert(record).execute()
+        except Exception as exc:
+            message = str(exc)
+            if (
+                self._episodes_support_profile
+                and "profile_id" in message
+                and "column" in message
+            ):
+                logger.warning(
+                    "kg_episodes.profile_id column not found; retrying without it."
+                )
+                self._episodes_support_profile = False
+                record.pop("profile_id", None)
+                self.client.table(self.config.episodes_table).upsert(record).execute()
+            else:
+                raise
 
     # ------------------------------------------------------------------ #
     # Lookups / dedupe helpers

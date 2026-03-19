@@ -188,7 +188,7 @@ call .venv\Scripts\activate.bat
 
 echo [4/5] Installing dependencies...
 python -m pip install --upgrade pip setuptools wheel
-pip install -e .[vision]
+pip install -e .[vision-client]
 if %ERRORLEVEL% neq 0 (
   echo Dependency install failed.
   exit /b 1
@@ -208,7 +208,7 @@ endlocal
 
     client_config_example = r"""@echo off
 REM VPS base URL (no trailing slash)
-set VPS_BASE_URL=http://31.97.211.45:8000
+set VPS_BASE_URL=https://your-domain.example
 
 REM Optional API token (leave empty if backend API_TOKEN is not set)
 set REMOTE_API_TOKEN=
@@ -282,7 +282,7 @@ Edit:
 - `client_config.bat`
 
 Set:
-- `VPS_BASE_URL=http://<your-vps-ip>:8000`
+- `VPS_BASE_URL=https://<your-domain>`
 - `REMOTE_API_TOKEN=<token>` (only if backend has `API_TOKEN` set)
 
 ## 4) Run

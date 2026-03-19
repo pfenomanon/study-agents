@@ -67,11 +67,15 @@ class KnowledgeIngestionService:
         )
 
         chunks = self._ensure_embeddings(payload.chunks)
-        documents_written = self.graph_store.upsert_documents(chunks)
+        documents_written = self.graph_store.upsert_documents(
+            chunks, payload.group_id, payload.profile_id
+        )
 
         extraction = self._extraction_engine.extract(payload)
         nodes_written = self.graph_store.upsert_nodes(extraction.nodes)
-        edges_written = self.graph_store.upsert_edges(extraction.edges, payload.group_id)
+        edges_written = self.graph_store.upsert_edges(
+            extraction.edges, payload.group_id, payload.profile_id
+        )
 
         warnings: list[str] = []
         episodes_written = 0
@@ -139,6 +143,7 @@ class KnowledgeIngestionService:
             "source": payload.source,
             "source_type": payload.source_type,
             "group_id": payload.group_id,
+            "profile_id": payload.profile_id,
             "tags": payload.tags,
             "reference_time": payload.reference_time.isoformat(),
             "metadata": payload.metadata,

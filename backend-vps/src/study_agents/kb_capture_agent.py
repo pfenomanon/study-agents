@@ -30,7 +30,7 @@ from .config import (
 # Import RAG modules for chunking
 from .rag_builder_core import chunk_text, split_into_paragraphs
 from .ollama_client import chat as ollama_chat
-from .prompt_loader import load_prompt
+from .prompt_loader import load_required_prompt
 from .supabase_client import create_supabase_client
 
 try:
@@ -64,28 +64,28 @@ if OLLAMA_HOST:
 if OLLAMA_API_KEY:
     os.environ.setdefault("OLLAMA_API_KEY", OLLAMA_API_KEY)
 
-# Load Markdown system prompt
-SYSTEM_PROMPT_PATH = (
-    Path(__file__).parent.parent.parent / "prompts" / "markdown_system_prompt.md"
+# Required prompts (fail fast if missing/empty so domain prompts stay authoritative)
+MARKDOWN_SYSTEM_PROMPT = load_required_prompt("markdown_system_prompt.md")
+KB_PRIMARY_PROMPT = load_required_prompt("kb_answer_primary.txt")
+KB_FALLBACK_PROMPT = load_required_prompt("kb_answer_fallback.txt")
+KB_CONTEXT_USER_PROMPT_TEMPLATE = load_required_prompt(
+    "kb_context_user_prompt_template.txt"
 )
-MARKDOWN_SYSTEM_PROMPT = (
-    SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    if SYSTEM_PROMPT_PATH.exists()
-    else "Convert the following text to clean, well-structured Markdown:"
+KB_FALLBACK_USER_PROMPT_TEMPLATE = load_required_prompt(
+    "kb_fallback_user_prompt_template.txt"
 )
 
-_DEFAULT_KB_PRIMARY_PROMPT = """You are a precise, evidence-based assistant. Follow these rules:
 
-1. If the context provides the answer, use it directly
-2. If the context doesn't contain the answer, use your general knowledge
-3. For True/False questions, answer based on standard practices and common knowledge
-4. Keep answers concise and factual
-5. For multiple choice questions, select the most appropriate answer"""
+def _render_kb_context_user_prompt(context: str, question: str) -> str:
+    return (
+        KB_CONTEXT_USER_PROMPT_TEMPLATE.replace("__CONTEXT__", (context or "")[:4000])
+        .replace("__QUESTION__", question or "")
+        .strip()
+    )
 
-_DEFAULT_KB_FALLBACK_PROMPT = "You are a helpful assistant. Answer the following question."
 
-KB_PRIMARY_PROMPT = load_prompt("kb_answer_primary.txt", _DEFAULT_KB_PRIMARY_PROMPT)
-KB_FALLBACK_PROMPT = load_prompt("kb_answer_fallback.txt", _DEFAULT_KB_FALLBACK_PROMPT)
+def _render_kb_fallback_user_prompt(question: str) -> str:
+    return KB_FALLBACK_USER_PROMPT_TEMPLATE.replace("__QUESTION__", question or "").strip()
 
 # ---------------- SCREEN CAPTURE ----------------
 def capture_monitor(
@@ -579,17 +579,7 @@ def answer_with_context(question: str, context: str) -> str:
         # Build prompt with context
         system_prompt = KB_PRIMARY_PROMPT
 
-        user_prompt = f"""Context from knowledge base:
-{context[:4000]}
-
-Question: {question}
-
-Instructions:
-- First check if the answer is in the context
-- If not, use your general knowledge to provide the best answer
-- For multiple choice, select the most logical option
-
-Answer:"""
+        user_prompt = _render_kb_context_user_prompt(context, question)
         
         # Generate answer using reasoning model
         if REASON_MODEL.startswith("gpt"):
@@ -629,7 +619,7 @@ Answer:"""
                     model=REASON_MODEL,
                     messages=[
                     {"role": "system", "content": KB_FALLBACK_PROMPT},
-                    {"role": "user", "content": f"Question: {question}"},
+                    {"role": "user", "content": _render_kb_fallback_user_prompt(question)},
                 ],
                     temperature=0.2,
                 )
@@ -639,7 +629,7 @@ Answer:"""
                     model=REASON_MODEL,
                 messages=[
                     {"role": "system", "content": KB_FALLBACK_PROMPT},
-                    {"role": "user", "content": f"Question: {question}"},
+                    {"role": "user", "content": _render_kb_fallback_user_prompt(question)},
                 ],
                 )
                 
@@ -668,17 +658,7 @@ def answer_question_with_rag(question: str, kb_path: Path) -> str:
         # Build prompt with knowledge base context
         system_prompt = KB_PRIMARY_PROMPT
 
-        user_prompt = f"""Context from knowledge base:
-{kb_content[:4000]}
-
-Question: {question}
-
-Instructions:
-- First check if the answer is in the context
-- If not, use your general knowledge to provide the best answer
-- For multiple choice, select the most logical option
-
-Answer:"""
+        user_prompt = _render_kb_context_user_prompt(kb_content, question)
         
         # Generate answer using reasoning model
         if REASON_MODEL.startswith("gpt"):
@@ -719,7 +699,7 @@ Answer:"""
                     model=REASON_MODEL,
                     messages=[
                     {"role": "system", "content": KB_FALLBACK_PROMPT},
-                    {"role": "user", "content": f"Question: {question}"},
+                    {"role": "user", "content": _render_kb_fallback_user_prompt(question)},
                 ],
                     temperature=0.2,
                 )
@@ -730,7 +710,7 @@ Answer:"""
                     model=REASON_MODEL,
                 messages=[
                     {"role": "system", "content": KB_FALLBACK_PROMPT},
-                    {"role": "user", "content": f"Question: {question}"},
+                    {"role": "user", "content": _render_kb_fallback_user_prompt(question)},
                 ],
                 )
                 

@@ -62,6 +62,7 @@ def build_rag_bundle(
     pdf_path: str,
     outdir: str = "out",
     push: bool = False,
+    profile: Optional[str] = None,
     chunk_size: Optional[int] = None,
     overlap: Optional[int] = None,
     max_sections: Optional[int] = None,
@@ -87,7 +88,7 @@ def build_rag_bundle(
     )
     ingest_result = None
     if push:
-        payload = episode_from_rag_artifacts(path, build.artifacts)
+        payload = episode_from_rag_artifacts(path, build.artifacts, profile_id=profile)
         ingest_result = ingestion_service.ingest_episode(payload)
 
     return {
@@ -99,7 +100,7 @@ def build_rag_bundle(
 
 
 @mcp.tool()
-def inspect_graph(question: str = "What are the key eligibility requirements in this context?") -> dict:
+def inspect_graph(question: str = "What are the eligibility requirements for TWIA coverage?") -> dict:
     """Invoke graph_inspector to refresh Mermaid/CSV exports and answer a question."""
     process = subprocess.run(
         [sys.executable, "-m", "study_agents.graph_inspector", "--question", question],
@@ -117,6 +118,7 @@ def web_research_crawl(
     max_depth: int = 2,
     max_pages: int = 20,
     outdir: str = "research_output/mcp",
+    profile: str = "",
     query: str = "",
     llm_relevance: bool = False,
     download_docs: bool = False,
@@ -136,6 +138,8 @@ def web_research_crawl(
         "--outdir",
         outdir,
     ]
+    if profile:
+        args += ["--profile", profile]
     if query:
         args += ["--query", query]
     if llm_relevance:

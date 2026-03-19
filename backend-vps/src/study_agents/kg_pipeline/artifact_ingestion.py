@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from .models import EpisodeChunk, EpisodePayload
+from ..profile_namespace import infer_profile_id_from_group_id, normalize_profile_id
 
 
 def _slugify(name: str) -> str:
@@ -46,6 +47,7 @@ def episode_from_rag_artifacts(
     artifacts: Dict[str, str],
     *,
     group_id: str | None = None,
+    profile_id: str | None = None,
     reference_time: datetime | None = None,
 ) -> EpisodePayload:
     pdf_path = Path(pdf_path)
@@ -55,6 +57,11 @@ def episode_from_rag_artifacts(
 
     chunks = _load_chunks(chunks_path)
     slug = group_id or _slugify(pdf_path.stem)
+    resolved_profile = (
+        normalize_profile_id(profile_id)
+        if profile_id
+        else (infer_profile_id_from_group_id(group_id) if group_id else None)
+    ) or _slugify(pdf_path.stem)
     ref_time = reference_time or datetime.fromtimestamp(pdf_path.stat().st_mtime)
 
     raw_text: str | None = None
@@ -70,6 +77,7 @@ def episode_from_rag_artifacts(
         source_type="pdf",
         reference_time=ref_time,
         group_id=slug,
+        profile_id=resolved_profile,
         tags=aggregate_tags(chunks),
         chunks=chunks,
         raw_text=raw_text,

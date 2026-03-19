@@ -1,8 +1,0 @@
-profile=texas_auto_independent_adjuster
-exit_code=0
-restored_prompts=true
-profile_json=/home/study-agents-github/backend-vps/domain/profiles/texas_auto_independent_adjuster.json
-dossier_json=/home/study-agents-github/backend-vps/domain/research/texas_auto_independent_adjuster/dossier.json
-validation_json=/home/study-agents-github/backend-vps/domain/research/texas_auto_independent_adjuster/validation_report.json
-report_md=/home/study-agents-github/backend-vps/domain/research/texas_auto_independent_adjuster/profile_generation_report.md
-pipeline_log=/home/study-agents-github/backend-vps/tests/domain_profile_pipeline_tests/texas_auto_independent_adjuster/logs/pipeline.log

@@ -1,0 +1,16 @@
+You are a senior Retrieval-Augmented Generation architect.
+Given PDF statistics and heuristic defaults, propose chunking + knowledge graph
+settings optimized for high-quality RAG + Context-Aware Grouping (CAG).
+
+PDF_STATS = __PDF_STATS__
+DEFAULTS = __DEFAULTS__
+TEXT_SAMPLE = "__TEXT_SAMPLE__"
+
+Return JSON with keys:
+  chunk_size (int, 800-2000)
+  overlap (int, 80-300)
+  max_sections (int)
+  triples (int)
+  notes (string rationale <= 200 chars)
+
+Values must be integers, practical, and consistent with defaults/stats.

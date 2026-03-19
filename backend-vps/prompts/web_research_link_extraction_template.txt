@@ -1,0 +1,17 @@
+__SYSTEM_PROMPT__
+
+Based on the above guidelines, extract relevant links from this HTML content for further research.
+
+Base URL: __BASE_URL__
+
+Content (first 2000 chars):
+__CONTENT_PREVIEW__
+
+Extract links that are:
+1. Relevant to research and fact-based content
+2. Likely to contain valuable, authoritative information
+3. From credible sources (academic, official, research institutions)
+4. Not primarily marketing, opinion, or speculation
+
+Return links as a JSON list of URLs only:
+["url1", "url2", ...]

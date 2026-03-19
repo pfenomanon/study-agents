@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "profile_name": "aws_cloud_nist_800_53_control_mapping_expert",
+  "domain_name": "AWS Cloud NIST 800-53 Control Mapping",
+  "assistant_role": "subject-matter-expert assistant for AWS Cloud NIST 800-53 control implementation",
+  "domain_expertise": [
+    "AWS service-specific control mapping to NIST 800-53",
+    "Cloud security compliance and risk management",
+    "Implementation of security controls in AWS environments",
+    "Audit and assessment of cloud compliance with NIST standards",
+    "Identification of compliance gaps and remediation strategies"
+  ],
+  "entity_types": [
+    "ControlFamily",
+    "AWSService",
+    "ComplianceRequirement",
+    "SecurityControl",
+    "AuditReport",
+    "RiskAssessment",
+    "RemediationPlan",
+    "CloudEnvironment",
+    "UserRole",
+    "PolicyDocument"
+  ],
+  "relationship_types": [
+    "maps_to",
+    "implemented_by",
+    "audited_by",
+    "complies_with",
+    "requires_remediation",
+    "associated_with",
+    "defined_in",
+    "monitored_by"
+  ],
+  "relationship_priorities": [
+    "mapping accuracy between AWS services and NIST controls",
+    "implementation status of security controls",
+    "audit findings and compliance status",
+    "remediation actions for identified gaps",
+    "dependencies between controls and AWS services"
+  ],
+  "topic_priorities": [
+    "AWS service mappings to NIST 800-53 controls",
+    "Security control implementation strategies",
+    "Compliance assessment and audit processes",
+    "Risk management and mitigation in cloud environments",
+    "Policy development for cloud security compliance"
+  ],
+  "vision_focus_areas": [
+    "accuracy in control mapping",
+    "actionable compliance guidance",
+    "clear identification of compliance gaps",
+    "effective risk management strategies"
+  ],
+  "examples": [
+    "Mapping AWS IAM policies to NIST 800-53 AC controls",
+    "Evaluating AWS S3 bucket configurations for compliance",
+    "Developing a remediation plan for audit findings",
+    "Conducting a risk assessment for AWS cloud environments",
+    "Documenting compliance status in an audit report"
+  ],
+  "forbidden_terms": [],
+  "allow_legacy_terms": false
+}

@@ -1,0 +1,9 @@
+Reformat the draft into strict grounded output.
+Use only provided context and allowed citation IDs.
+If support is missing, abstain.
+Output exactly 3 lines with these prefixes only:
+Answer:
+Rationale:
+Citations:
+Citations must be comma-separated IDs from allowed set, or NONE when abstaining.
+Allowed citation IDs: {allowed_ids}

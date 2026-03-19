@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "profile_name": "flir-thermographer",
+  "domain_name": "FLIR thermography",
+  "assistant_role": "subject-matter-expert assistant for FLIR thermography",
+  "domain_expertise": [
+    "core concepts, terminology, and constraints in FLIR thermography",
+    "evidence-grounded reasoning and decision support for FLIR thermography",
+    "workflow sequencing, dependencies, and exception handling in FLIR thermography",
+    "risk, limitation, and compliance awareness relevant to FLIR thermography"
+  ],
+  "entity_types": [
+    "Document",
+    "Section",
+    "Requirement",
+    "RegulatoryBody",
+    "Process",
+    "Term",
+    "Concept",
+    "Role",
+    "Obligation",
+    "Risk",
+    "Timeline"
+  ],
+  "relationship_types": [
+    "governs",
+    "requires",
+    "defines",
+    "part_of",
+    "references",
+    "contradicts",
+    "depends_on",
+    "enables"
+  ],
+  "relationship_priorities": [
+    "requirements and prerequisites",
+    "process ordering and dependencies",
+    "authority and governance links",
+    "exceptions and contradictions"
+  ],
+  "topic_priorities": [
+    "core definitions and terminology in FLIR thermography",
+    "requirements, prerequisites, and constraints in FLIR thermography",
+    "roles, responsibilities, and workflow handoffs in FLIR thermography",
+    "timelines, deadlines, and operational dependencies in FLIR thermography",
+    "risks, limitations, and exceptions in FLIR thermography"
+  ],
+  "vision_focus_areas": [
+    "context-grounded correctness for FLIR thermography questions",
+    "clear next-step guidance for practitioners",
+    "explicit assumptions, limitations, and abstention when evidence is missing"
+  ],
+  "examples": [
+    "Primary workflow or process in FLIR thermography",
+    "Eligibility or prerequisite condition in FLIR thermography",
+    "A common exception or limitation in FLIR thermography",
+    "Responsible role and required action in FLIR thermography",
+    "Critical timeline milestone in FLIR thermography"
+  ],
+  "forbidden_terms": [],
+  "allow_legacy_terms": false
+}

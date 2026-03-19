@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-03-16T01:55:37.587619+00:00",
+  "profile_path": "/home/study-agents/domain/profiles/aws_cloud_nist_800_53_control_mapping_expert.json",
+  "used_ai": true,
+  "runtime": {
+    "platform": "openai",
+    "model": "gpt-4o"
+  },
+  "ai_error": "",
+  "profile_validation_errors": [],
+  "wizard_check_ok": true,
+  "wizard_check_output": "Loaded env files: /home/study-agents/.env\nValidation passed.",
+  "field_evidence": {
+    "domain_expertise": [
+      "S1",
+      "S2",
+      "S3"
+    ],
+    "entity_types": [
+      "S1",
+      "S2"
+    ],
+    "relationship_types": [
+      "S1",
+      "S2"
+    ],
+    "relationship_priorities": [
+      "S1",
+      "S2"
+    ],
+    "topic_priorities": [
+      "S1",
+      "S2"
+    ],
+    "vision_focus_areas": [
+      "S1",
+      "S2"
+    ],
+    "examples": [
+      "S1",
+      "S2"
+    ]
+  },
+  "field_evidence_errors": [],
+  "ontology_quality_enforced": true,
+  "ontology_quality_errors": [],
+  "ontology_quality_metrics": {
+    "entity_overlap_ratio": 0.0,
+    "relationship_overlap_ratio": 0.0,
+    "entity_count": 10,
+    "relationship_count": 8,
+    "novel_entity_count": 10,
+    "novel_relationship_count": 8,
+    "novel_entity_grounded_count": 8,
+    "novel_relationship_grounded_count": 4,
+    "generic_entity_count": 0,
+    "generic_relationship_count": 0,
+    "domain_token_count": 409
+  }
+}

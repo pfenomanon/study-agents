@@ -1,9 +1,17 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   cag-service:
     build:
       context: .
-      dockerfile: docker/cag.Dockerfile
-    image: study-agents-cag
+      dockerfile: docker/python.Dockerfile
+      args:
+        INSTALL_EXTRAS: server
+    image: study-agents-python:latest
     env_file: .env
     environment:
       HOME: /app
@@ -13,6 +21,7 @@ services:
       - backend
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c", "/app/use_env.sh python -m study_agents.api_server"]
+    logging: *default-logging
     volumes:
       - ./src:/app/src
       - ./prompts:/app/prompts
@@ -21,11 +30,13 @@ services:
       - env-vol:/env
 
   rag-service:
-    build:
-      context: .
-      dockerfile: docker/rag.Dockerfile
-    image: study-agents-rag
+    image: study-agents-python:latest
     env_file: .env
+    environment:
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    depends_on:
+      - cag-service
     volumes:
       - ./src:/app/src
       - ./prompts:/app/prompts
@@ -36,13 +47,17 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh python -m study_agents.rag_service"]
+    logging: *default-logging
 
   utility-service:
-    build:
-      context: .
-      dockerfile: docker/base.Dockerfile
-    image: study-agents-utility
+    image: study-agents-python:latest
     env_file: .env
+    environment:
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    depends_on:
+      - cag-service
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data
@@ -52,14 +67,21 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    logging: *default-logging
 
   copilot-service:
-    build:
-      context: .
-      dockerfile: docker/copilot.Dockerfile
-    image: study-agents-copilot
+    image: study-agents-python:latest
+    user: "0:0"
     env_file: .env
+    environment:
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      COPILOT_RESEARCH_OUTPUT_DIR: /app/data/output/research
+    depends_on:
+      - cag-service
     volumes:
+      - ./src:/app/src
+      - ./prompts:/app/prompts
       - ./research_output:/app/research_output
       - ./data:/app/data
       - env-vol:/env
@@ -67,8 +89,73 @@ services:
       - "127.0.0.1:9010:9010"
     networks:
       - backend
-    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh uvicorn study_agents.copilot_service:app --host 0.0.0.0 --port 9010"]
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh uvicorn study_agents.copilot_service:app --host 0.0.0.0 --port 9010 --workers ${COPILOT_SERVICE_WORKERS:-2}"]
     restart: unless-stopped
+    logging: *default-logging
+
+  copilot-frontend:
+    build:
+      context: ./copilot-frontend
+      dockerfile: ../docker/copilot-frontend.Dockerfile
+    image: study-agents-copilot-frontend
+    user: "0:0"
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_COPILOT_API: /api/copilot
+      COPILOT_BACKEND_URL: http://copilot-service:9010/copilot/chat
+      COPILOT_API_KEY: ${COPILOT_API_KEY:-}
+      RESEARCH_ROOT: /app/data/output/research
+    depends_on:
+      - copilot-service
+    volumes:
+      - ./data:/app/data
+      - ./research_output:/app/research_output
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - backend
+    restart: unless-stopped
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    networks:
+      - backend
+    restart: unless-stopped
+    logging: *default-logging
+
+  authelia:
+    image: authelia/authelia:latest
+    depends_on:
+      - redis
+    volumes:
+      - ./docker/authelia:/config
+    networks:
+      - backend
+    restart: unless-stopped
+    logging: *default-logging
+
+  tls-gateway:
+    image: caddy:2.8-alpine
+    env_file: .env
+    depends_on:
+      - cag-service
+      - rag-service
+      - copilot-service
+      - copilot-frontend
+      - authelia
+    ports:
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - backend
+    restart: unless-stopped
+    logging: *default-logging
 
   vault:
     image: hashicorp/vault:1.16.2
@@ -82,9 +169,12 @@ services:
     cap_add:
       - IPC_LOCK
     command: "server -dev"
+    logging: *default-logging
 
 volumes:
   env-vol:
+  caddy-data:
+  caddy-config:
 
 networks:
   backend:

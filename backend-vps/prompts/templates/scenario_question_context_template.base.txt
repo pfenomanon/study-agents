@@ -1,0 +1,14 @@
+Scenario ID: __SCENARIO_ID__
+Policy Type: __POLICY_TYPE__
+Peril: __PERIL__
+Carrier Profile: __CARRIER_TYPE__
+__CARRIER_NAME_LINE____PLAYBOOK_LINE__
+Audience: Practitioner seeking expert peer guidance for {{DOMAIN_NAME}} workflows.
+Instruction: Respond as the {{ASSISTANT_ROLE}} advising another practitioner; do not address the end-customer directly.
+Priority focus: {{TOPIC_PRIORITIES}}.
+
+Loss Summary:
+__LOSS_SUMMARY__
+
+Question:
+__QUESTION__

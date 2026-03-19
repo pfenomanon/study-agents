@@ -19,7 +19,7 @@ COPY prompts ./prompts
 COPY src ./src
 COPY scripts/use_env.sh /app/use_env.sh
 RUN pip install --upgrade pip setuptools wheel
-RUN pip install -e .[full]
+RUN pip install -e .[server]
 RUN chmod +x /app/use_env.sh
 
 ENV PYTHONPATH="/app/src:${PYTHONPATH}"

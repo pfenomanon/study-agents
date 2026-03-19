@@ -33,6 +33,16 @@ TARGETS = {
         "template": TEMPLATES_DIR / "kg_edge_extraction.base.txt",
         "output": PROMPTS_DIR / "kg_edge_extraction.txt",
     },
+    "cag_entity": {
+        "family": "cag_entity_extractor",
+        "template": TEMPLATES_DIR / "cag_entity_extraction.base.txt",
+        "output": PROMPTS_DIR / "cag_entity_extraction.txt",
+    },
+    "cag_relationship": {
+        "family": "cag_relationship_mapper",
+        "template": TEMPLATES_DIR / "cag_relationship_extraction.base.txt",
+        "output": PROMPTS_DIR / "cag_relationship_extraction.txt",
+    },
     "vision": {
         "family": "vision_reasoner",
         "template": TEMPLATES_DIR / "vision_reasoning.base.txt",
@@ -45,8 +55,13 @@ TARGETS = {
     },
     "scenario_structurer": {
         "family": "scenario_structurer",
-        "template": TEMPLATES_DIR / "scenario_answer_structuring.base.txt",
-        "output": PROMPTS_DIR / "scenario_answer_structuring.txt",
+        "template": TEMPLATES_DIR / "scenario_structuring_system.base.txt",
+        "output": PROMPTS_DIR / "scenario_structuring_system.txt",
+    },
+    "scenario_context": {
+        "family": "scenario_context_framer",
+        "template": TEMPLATES_DIR / "scenario_question_context_template.base.txt",
+        "output": PROMPTS_DIR / "scenario_question_context_template.txt",
     },
 }
 
@@ -73,6 +88,42 @@ FAMILY_SPECS: dict[str, dict[str, Any]] = {
     },
     "kg_edge_mapper": {
         "description": "Extract ontology-constrained graph edges from retrieved context.",
+        "slots": {
+            "DOMAIN_NAME",
+            "ASSISTANT_ROLE",
+            "DOMAIN_EXPERTISE",
+            "RELATIONSHIP_TYPES",
+            "RELATIONSHIP_PRIORITIES",
+            "TOPIC_PRIORITIES",
+        },
+        "required_template_slots": {
+            "DOMAIN_NAME",
+            "RELATIONSHIP_TYPES",
+            "RELATIONSHIP_PRIORITIES",
+        },
+    },
+    "cag_entity_extractor": {
+        "description": "Extract CAG entities from inline user-provided text snippets.",
+        "slots": {
+            "DOMAIN_NAME",
+            "ASSISTANT_ROLE",
+            "DOMAIN_EXPERTISE",
+            "ENTITY_TYPES",
+            "TOPIC_PRIORITIES",
+            "EXAMPLES",
+            "FORBIDDEN_TERMS",
+        },
+        "required_template_slots": {
+            "DOMAIN_NAME",
+            "ASSISTANT_ROLE",
+            "ENTITY_TYPES",
+            "TOPIC_PRIORITIES",
+            "EXAMPLES",
+            "FORBIDDEN_TERMS",
+        },
+    },
+    "cag_relationship_mapper": {
+        "description": "Extract CAG relationships from provided entities plus context snippets.",
         "slots": {
             "DOMAIN_NAME",
             "ASSISTANT_ROLE",
@@ -124,6 +175,21 @@ FAMILY_SPECS: dict[str, dict[str, Any]] = {
     },
     "scenario_structurer": {
         "description": "Transform free-form answer text into strict scenario workflow JSON.",
+        "slots": {
+            "DOMAIN_NAME",
+            "ASSISTANT_ROLE",
+            "DOMAIN_EXPERTISE",
+            "TOPIC_PRIORITIES",
+            "VISION_FOCUS_AREAS",
+        },
+        "required_template_slots": {
+            "DOMAIN_NAME",
+            "ASSISTANT_ROLE",
+            "TOPIC_PRIORITIES",
+        },
+    },
+    "scenario_context_framer": {
+        "description": "Frame scenario Q&A context for role-consistent retrieval prompts.",
         "slots": {
             "DOMAIN_NAME",
             "ASSISTANT_ROLE",
@@ -275,7 +341,12 @@ def _seed_domain_from_profile_name(profile_name: str) -> str:
     return re.sub(r"\s+", " ", cleaned) or "general subject-matter"
 
 
-def _normalize_string_list(value: Any, fallback: list[str]) -> list[str]:
+def _normalize_string_list(
+    value: Any,
+    fallback: list[str],
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
     if isinstance(value, str):
         items = [part.strip() for part in value.split(",")]
     elif isinstance(value, list):
@@ -283,6 +354,8 @@ def _normalize_string_list(value: Any, fallback: list[str]) -> list[str]:
     else:
         items = []
     cleaned = [item for item in items if item]
+    if allow_empty and isinstance(value, (list, str)):
+        return cleaned
     return cleaned or list(fallback)
 
 
@@ -309,7 +382,9 @@ def _normalize_profile_candidate(
         normalized[key] = [
             _sanitize_profile_text(item)
             for item in _normalize_string_list(
-            candidate.get(key), list(fallback_profile.get(key, []))
+                candidate.get(key),
+                list(fallback_profile.get(key, [])),
+                allow_empty=(key == "forbidden_terms"),
             )
         ]
 
@@ -588,6 +663,38 @@ def _validate_rendered_prompt(
                     f"Relationship type missing from rendered prompt: {rel_type}"
                 )
 
+    if target == "cag_entity":
+        required_tokens = (
+            '"entities"',
+            '"name"',
+            '"type"',
+            '"description"',
+            '"confidence"',
+        )
+        for token in required_tokens:
+            if token not in prompt_text:
+                errors.append(f"Missing required schema token in prompt: {token}")
+        for entity_type in profile["entity_types"]:
+            if entity_type not in prompt_text:
+                errors.append(f"Entity type missing from rendered prompt: {entity_type}")
+
+    if target == "cag_relationship":
+        required_tokens = (
+            '"relationships"',
+            '"source"',
+            '"target"',
+            '"relationship"',
+            '"confidence"',
+        )
+        for token in required_tokens:
+            if token not in prompt_text:
+                errors.append(f"Missing required schema token in prompt: {token}")
+        for rel_type in profile["relationship_types"]:
+            if rel_type not in prompt_text:
+                errors.append(
+                    f"Relationship type missing from rendered prompt: {rel_type}"
+                )
+
     if target == "vision":
         required_tokens = (
             "Question-type policy (adaptive):",
@@ -626,7 +733,7 @@ def _validate_rendered_prompt(
             "Return JSON only with this exact structure:",
             '"summary"',
             '"recommended_steps"',
-            '"analysis"',
+            '"coverage_analysis"',
             '"documentation_checklist"',
             '"citations"',
             "Do not add markdown fences",
@@ -634,6 +741,21 @@ def _validate_rendered_prompt(
         for token in required_tokens:
             if token not in prompt_text:
                 errors.append(f"Missing required output section in prompt: {token}")
+
+    if target == "scenario_context":
+        required_tokens = (
+            "__SCENARIO_ID__",
+            "__POLICY_TYPE__",
+            "__PERIL__",
+            "__CARRIER_TYPE__",
+            "__CARRIER_NAME_LINE__",
+            "__PLAYBOOK_LINE__",
+            "__LOSS_SUMMARY__",
+            "__QUESTION__",
+        )
+        for token in required_tokens:
+            if token not in prompt_text:
+                errors.append(f"Missing required context placeholder token: {token}")
 
     if "{context}" in prompt_text:
         try:
@@ -692,6 +814,20 @@ def _target_constraints(target: str, profile: dict[str, Any]) -> str:
             f"- Allowed relationship types: {', '.join(profile['relationship_types'])}.\n"
             "- Return plain prompt text only. No markdown fences."
         )
+    if target == "cag_entity":
+        return (
+            "- Keep JSON schema fields: entities, name, type, description, confidence.\n"
+            f"- Allowed entity types: {', '.join(profile['entity_types'])}.\n"
+            "- Keep confidence numeric and bounded (0.0-1.0).\n"
+            "- Return plain prompt text only. No markdown fences."
+        )
+    if target == "cag_relationship":
+        return (
+            "- Keep JSON schema fields: relationships, source, target, relationship, confidence.\n"
+            f"- Allowed relationship types: {', '.join(profile['relationship_types'])}.\n"
+            "- Keep confidence numeric and bounded (0.0-1.0).\n"
+            "- Return plain prompt text only. No markdown fences."
+        )
     if target == "cag_answer":
         return (
             "- Keep role as `subject-matter-expert` (never `exam helper`).\n"
@@ -705,9 +841,15 @@ def _target_constraints(target: str, profile: dict[str, Any]) -> str:
     if target == "scenario_structurer":
         return (
             "- Output must enforce strict JSON-only transformation behavior.\n"
-            "- Keep exact required keys: summary, recommended_steps, analysis, documentation_checklist, citations.\n"
+            "- Keep exact required keys: summary, recommended_steps, coverage_analysis, documentation_checklist, citations.\n"
             "- For documentation_checklist entries keep keys: item, status, notes.\n"
             "- For citations entries keep keys: source, details.\n"
+            "- Return plain prompt text only. No markdown fences."
+        )
+    if target == "scenario_context":
+        return (
+            "- Preserve runtime placeholders exactly: __SCENARIO_ID__, __POLICY_TYPE__, __PERIL__, __CARRIER_TYPE__, __CARRIER_NAME_LINE__, __PLAYBOOK_LINE__, __LOSS_SUMMARY__, __QUESTION__.\n"
+            "- Keep audience/instruction concise and practitioner-facing.\n"
             "- Return plain prompt text only. No markdown fences."
         )
     return (
@@ -1195,10 +1337,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--targets",
-        default="entity,edge,vision,cag_answer,scenario_structurer",
+        default="entity,edge,cag_entity,cag_relationship,vision,cag_answer,scenario_structurer,scenario_context",
         help=(
             "Comma-separated targets to generate/check: "
-            "entity,edge,vision,cag_answer,scenario_structurer."
+            "entity,edge,cag_entity,cag_relationship,vision,cag_answer,scenario_structurer,scenario_context."
         ),
     )
     parser.add_argument(

@@ -11,6 +11,7 @@ backend-vps/data/
 backend-vps/knowledge_graph/
 backend-vps/research_output/
 backend-vps/temp_images/
+backend-vps/docker/authelia/
 local-run/study-agents/data/
 local-run/study-agents/knowledge_graph/
 local-run/study-agents/research_output/

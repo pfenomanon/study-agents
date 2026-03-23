@@ -12,6 +12,9 @@ backend-vps/knowledge_graph/
 backend-vps/research_output/
 backend-vps/temp_images/
 backend-vps/docker/authelia/
+backend-vps/copilot-frontend/node_modules/
+backend-vps/copilot-frontend/.next/
+backend-vps/copilot-frontend/tsconfig.tsbuildinfo
 local-run/study-agents/data/
 local-run/study-agents/knowledge_graph/
 local-run/study-agents/research_output/

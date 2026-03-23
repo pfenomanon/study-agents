@@ -5,8 +5,35 @@ This repository is split into two folders:
 - `backend-vps/`: Linux VPS backend host package (APIs/services)
 - `local-run/`: local client package (Windows/local runtime)
 
+## Important Path Note
+
+- For backend deployment, always run commands from `study-agents/backend-vps`.
+- `local-run/` is for client-side capture workflows only.
+
+Backend quickstart:
+
+```bash
+git clone git@github.com:pfenomanon/study-agents.git
+cd study-agents/backend-vps
+cp .env.example .env
+docker compose up -d --build
+```
+
+Optional root helper:
+
+```bash
+cd study-agents
+./bootstrap.sh
+```
+
+Not included in Git (by design):
+
+- Sensitive `.env` values
+- Runtime/generated state (`data/`, `knowledge_graph/`, `research_output/`, Authelia runtime secrets/state)
+
 Start here:
 - `GETTING_STARTED.md` (authoritative clone/pull install + personalization guide)
+- `SETUP.md` (concise setup path with path guardrails)
 
 Additional quick references:
 - Backend host quickstart: `backend-vps/README_BACKEND_VPS_QUICKSTART.md`

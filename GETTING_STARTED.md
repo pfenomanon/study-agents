@@ -14,6 +14,12 @@ It covers:
 - `backend-vps/`: Linux backend package (APIs/services/prompts/scripts)
 - `local-run/`: Windows/local client package for remote capture workflows
 
+### 1.1 Path Guardrails (Important)
+
+- Backend/server commands must be run from `study-agents/backend-vps`.
+- Client capture setup runs from `study-agents/local-run`.
+- If unsure, from repo root run `./bootstrap.sh` to enter `backend-vps` and scaffold `.env`.
+
 ## 2) Runtime Data and Bind Mount Behavior
 
 In `backend-vps/docker-compose.yml`, several host folders are bind-mounted into containers:

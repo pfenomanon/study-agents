@@ -20,6 +20,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
 - `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `status`, `logs`, `stop`).
 - `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
+- `scripts/generate_local_api_keys.sh`: generates local service auth tokens (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`) with compatible entropy/format.
 - `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
 - `docker-compose.zimaboard.yml`: compose override with resource limits and optional `tools`/`vault` profiles for 16GB hosts.
 - `docker/python.Dockerfile`: single shared Python runtime image used by CAG/RAG/Copilot/utility services with service-specific commands.
@@ -215,17 +216,21 @@ study-agents-mcp
 ## Getting Started
 
 1. Copy `.env.example` to `.env` and fill in your keys/models/URLs.
-2. Install the package with the extras you need:
+2. Generate local service auth tokens (recommended defaults):
+   ```bash
+   bash scripts/generate_local_api_keys.sh --write-env
+   ```
+3. Install the package with the extras you need:
    - Core CLI/API only: `pip install -e .`
    - API + OCR server runtime: `pip install -e .[server]`
    - Screenshot/vision client tooling: `pip install -e .[vision-client]`
    - Everything: `pip install -e .[full]`
-3. Validate your environment before launching any agents:
+4. Validate your environment before launching any agents:
    ```bash
    study-agents-validate --print-summary
    ```
-4. Run `supabase_schema.sql` in your Supabase target (cloud or local).
-5. Start the pieces you need:
+5. Run `supabase_schema.sql` in your Supabase target (cloud or local).
+6. Start the pieces you need:
    - Individually (legacy): `study-agents-rag`, `study-agents-cag`, `study-agents-graph-inspector`, `study-agents-api`
    - Orchestration helper: `study-agents-manage run --services cag,api`
 
@@ -273,6 +278,12 @@ Press `Ctrl+C` to stop every managed process gracefully.
 
 ## Security Hardening
 - Set API keys for service access: `API_TOKEN` (CAG), `RAG_API_TOKEN` (RAG builder), and `COPILOT_API_KEY` (Copilot). Clients send `X-API-Key` or `Authorization: Bearer <token>`.
+- Generate local service tokens with:
+  ```bash
+  # Recommended defaults: URL-safe, 32 random bytes each
+  bash scripts/generate_local_api_keys.sh --write-env
+  ```
+- Token guidance: use at least 32 random bytes (256-bit) per key; URL-safe tokens (~43 chars) or 64-char hex are compatible; keep keys distinct per service.
 - APIs include basic in-memory throttling; tune with `API_RATE_LIMIT_PER_MINUTE`, `RAG_RATE_LIMIT_PER_MINUTE`, and `COPILOT_RATE_LIMIT_PER_MINUTE`.
 - Image uploads are size/type limited (`MAX_UPLOAD_BYTES`, PNG/JPEG only), and temporary OCR images can be auto-deleted with `DELETE_TEMP_IMAGES=true`.
 - File-processing endpoints are root-constrained. Configure allowlists via `RAG_ALLOWED_INPUT_ROOTS`, `RAG_ALLOWED_OUTPUT_ROOTS`, and `COPILOT_ALLOWED_FILE_ROOTS`.

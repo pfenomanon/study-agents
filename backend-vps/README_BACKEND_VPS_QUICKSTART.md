@@ -43,7 +43,24 @@ bash scripts/install_backend_vps.sh start-local-all
 
 Optional security:
 - `API_TOKEN` (required by clients if set)
+- `RAG_API_TOKEN` (falls back to `API_TOKEN` if unset)
 - `COPILOT_API_KEY` (required for `/copilot/*` if set)
+- `SCENARIO_API_KEY` (falls back to `API_TOKEN` if unset)
+
+Generate local backend service tokens (installer/admin generated):
+
+```bash
+# Recommended: URL-safe tokens, 32 random bytes each (~43 chars)
+bash scripts/generate_local_api_keys.sh --write-env
+```
+
+Token compatibility guidance:
+- Minimum entropy: 32 random bytes (256-bit) per key.
+- Supported format: URL-safe (`A-Za-z0-9_-`) or hex.
+- Script populates: `API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`.
+- Keep service tokens distinct; avoid sharing one token across all services.
+
+If you later enable TLS gateway auth (`./scripts/bootstrap_authelia.sh`), missing Authelia secrets are auto-generated and written into `.env`.
 
 Transport security:
 - Compose exposes HTTP by default.

@@ -50,6 +50,19 @@ Recommended security keys:
 - `API_TOKEN`
 - `RAG_API_TOKEN`
 - `COPILOT_API_KEY`
+- optional `SCENARIO_API_KEY` (if scenario API is enabled)
+
+Generate local backend service tokens:
+
+```bash
+# Recommended: URL-safe tokens, 32 random bytes each
+bash scripts/generate_local_api_keys.sh --write-env
+```
+
+Compatibility guidance:
+- minimum entropy: 32 random bytes (256-bit) per key
+- accepted practical formats: URL-safe token (~43 chars) or hex (64 chars)
+- keep service keys distinct rather than reusing one token everywhere
 
 Recommended memory setting for 16GB hosts:
 - `COPILOT_SERVICE_WORKERS=1`
@@ -114,6 +127,11 @@ bash scripts/install_zimaboard_16gb.sh restart
 Required `.env` values before bootstrap:
 - `PUBLIC_DOMAIN`
 - `ACME_EMAIL`
+
+If unset, bootstrap auto-generates:
+- `AUTHELIA_AUTH_PASSWORD`, `AUTHELIA_OIDC_CLIENT_SECRET` (24-char alphanumeric)
+- `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET` (64-char hex)
+- `docker/authelia/oidc_jwks_rs256.pem` (RSA-2048 signing key)
 
 ## 7) Validation checklist
 

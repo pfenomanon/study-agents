@@ -47,6 +47,9 @@ Set:
 - `VPS_BASE_URL=https://<your-vps-domain-or-ip>`
 - `REMOTE_API_TOKEN=<token>` (only if backend has `API_TOKEN` set)
 
+Backend admin token generation reference:
+- `cd backend-vps && bash scripts/generate_local_api_keys.sh --write-env`
+
 ## 4) Run
 
 Preferred:

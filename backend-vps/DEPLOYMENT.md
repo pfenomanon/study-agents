@@ -42,6 +42,15 @@ python scripts/build_release_bundles.py
    - Gateway/Auth values: `PUBLIC_DOMAIN`, `ACME_EMAIL`, optional `GATEWAY_ALLOWED_CIDRS`
    - Optional toggles: `USE_HYBRID_RETRIEVAL=true`, `RAG_USE_DOCLING=true`
    - Optional security controls: request limits (`*_RATE_LIMIT_PER_MINUTE`), body limits (`COPILOT_MAX_BODY_BYTES`), path allowlists (`RAG_ALLOWED_*`, `COPILOT_ALLOWED_FILE_ROOTS`), and crawler SSRF guard (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`)
+   - Generate local service tokens with:
+     ```bash
+     # 32 random bytes per key (recommended)
+     bash scripts/generate_local_api_keys.sh --write-env
+     ```
+   - Token format guidance:
+     - Use at least 32 random bytes (256-bit) per key.
+     - Prefer URL-safe tokens (`A-Za-z0-9_-`, around 43 chars) or use 64-char hex.
+     - Keep per-service keys distinct (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`; optional `SCENARIO_API_KEY`).
 3. Apply the schema to your Supabase project:
    ```bash
    psql "$SUPABASE_URL" < supabase_schema.sql
@@ -81,6 +90,11 @@ Bootstrap Authelia config and credentials before first secure start:
 ```bash
 ./scripts/bootstrap_authelia.sh
 ```
+
+Authelia bootstrap generates missing local secrets automatically:
+- `AUTHELIA_AUTH_PASSWORD` and `AUTHELIA_OIDC_CLIENT_SECRET`: 24-char alphanumeric
+- `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET`: 64-char hex (32 random bytes each)
+- `docker/authelia/oidc_jwks_rs256.pem`: RSA-2048 signing key
 
 Default behavior after bootstrap:
 - Login username is in `AUTHELIA_AUTH_USERNAME` (defaults to `gateway-admin`)

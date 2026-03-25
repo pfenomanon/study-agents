@@ -16,6 +16,7 @@ Backend quickstart:
 git clone git@github.com:pfenomanon/study-agents.git
 cd study-agents/backend-vps
 cp .env.example .env
+bash scripts/generate_local_api_keys.sh --write-env
 docker compose up -d --build
 ```
 

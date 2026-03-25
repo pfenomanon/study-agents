@@ -35,6 +35,9 @@ If `raw.githubusercontent.com` access fails due repository privacy, copy these s
 - `local-run/native/vision_remote_capture_windows.ps1`
 - `local-run/native/vision_remote_capture_macos.sh`
 
+Backend token generation reference:
+- `cd backend-vps && bash scripts/generate_local_api_keys.sh --write-env`
+
 ## Session/TLS Notes
 
 - Session controls are enabled by default.

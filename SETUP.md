@@ -30,6 +30,14 @@ Set at minimum:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 
+Generate local backend service tokens (recommended: 32-byte URL-safe keys):
+
+```bash
+bash scripts/generate_local_api_keys.sh --write-env
+```
+
+This generates `API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, and `SCENARIO_API_KEY`.
+
 ## 4) Start backend stack
 
 ```bash

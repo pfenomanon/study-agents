@@ -18,6 +18,7 @@ cd study-agents-backend-vps-20260311-025842
 ```bash
 bash scripts/install_backend_vps.sh deps
 cp -n .env.example .env
+bash scripts/generate_local_api_keys.sh --write-env
 nano .env
 ```
 3. Start:

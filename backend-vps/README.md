@@ -8,6 +8,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 - `supabase_schema.sql`: create new Supabase tables/function before ingesting data.
 - `supabase/migrations/202603150001_profile_catalog.sql`: additive migration for profile namespaces + profile catalog.
 - `docs/PROFILE_API.md`: profile endpoint contracts used by Copilot UI/CLI.
+- `ZIMABOARD_16GB_DEPLOYMENT.md`: ZimaBoard-focused install, tuning, validation, and operations workflow.
 
 ## Packaging & Deployment Helpers
 
@@ -18,7 +19,9 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
 - `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `status`, `logs`, `stop`).
+- `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
 - `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
+- `docker-compose.zimaboard.yml`: compose override with resource limits and optional `tools`/`vault` profiles for 16GB hosts.
 - `docker/python.Dockerfile`: single shared Python runtime image used by CAG/RAG/Copilot/utility services with service-specific commands.
 
 ## Graph Inspector & Visualization

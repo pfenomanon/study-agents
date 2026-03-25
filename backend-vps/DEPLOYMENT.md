@@ -52,6 +52,13 @@ python scripts/build_release_bundles.py
 ```bash
 docker compose up -d --build
 ```
+
+For x86_64 16GB edge hosts (for example ZimaBoard-class devices), use the tuned workflow:
+```bash
+bash scripts/install_zimaboard_16gb.sh start
+```
+This applies swap/sysctl host tuning, uses `docker-compose.zimaboard.yml`, and runs post-start validation.
+
 Services:
 - `cag-service` (port 8000): `/cag-answer`, `/cag-ocr-answer`
 - `rag-service` (port 8100): RAG builder API

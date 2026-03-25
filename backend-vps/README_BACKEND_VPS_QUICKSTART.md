@@ -55,6 +55,12 @@ Transport security:
 bash scripts/install_backend_vps.sh start
 ```
 
+For ZimaBoard/x86_64 16GB hosts, use the tuned workflow:
+
+```bash
+bash scripts/install_zimaboard_16gb.sh start
+```
+
 If you are using local Supabase and want one command for everything, use:
 ```bash
 bash scripts/install_backend_vps.sh start-local-all

@@ -36,6 +36,12 @@ Set at minimum:
 docker compose up -d --build
 ```
 
+ZimaBoard/x86_64 16GB tuned path:
+
+```bash
+bash scripts/install_zimaboard_16gb.sh start
+```
+
 ## 5) Optional root helper
 
 From repo root:

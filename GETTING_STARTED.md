@@ -160,6 +160,14 @@ docker compose up -d --build
 docker compose ps
 ```
 
+For ZimaBoard-class 16GB hosts (recommended tuned path), run:
+
+```bash
+bash scripts/install_zimaboard_16gb.sh start
+```
+
+This applies host tuning (swap + sysctl), uses `docker-compose.zimaboard.yml`, and runs validation checks automatically.
+
 For the local Supabase all-in-one path:
 
 ```bash

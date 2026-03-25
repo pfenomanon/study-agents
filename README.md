@@ -37,6 +37,7 @@ Start here:
 
 Additional quick references:
 - Backend host quickstart: `backend-vps/README_BACKEND_VPS_QUICKSTART.md`
+- ZimaBoard 16GB deployment + operations: `backend-vps/ZIMABOARD_16GB_DEPLOYMENT.md`
 - Windows client quickstart: `local-run/README_WINDOWS_CLIENT_QUICKSTART.md`
 - macOS client quickstart: `local-run/README_MAC_CLIENT_QUICKSTART.md`
 - Native no-Python remote capture scripts: `local-run/native/README.md`

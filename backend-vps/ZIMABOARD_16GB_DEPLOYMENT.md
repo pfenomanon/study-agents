@@ -2,6 +2,8 @@
 
 This guide is for running the `backend-vps` stack on a ZimaBoard-class x86_64 host with 16GB RAM using Docker Compose.
 
+It assumes you are starting from a brand-new board with no operating system installed.
+
 It adds:
 - a Zima-specific compose override: `docker-compose.zimaboard.yml`
 - a host prep/start script: `scripts/install_zimaboard_16gb.sh`
@@ -9,10 +11,40 @@ It adds:
 
 ## Scope and assumptions
 
-- Host OS: Debian/Ubuntu Linux on x86_64
+- Fresh hardware is acceptable (no OS preinstalled).
+- Target OS for this guide: Debian/Ubuntu Linux on x86_64.
 - Hardware: 16GB RAM host (for example, ZimaBoard 2 1664)
 - Storage: SSD preferred for `/var/lib/docker` and repo data
 - Network: internet egress to OpenAI/Supabase and package repos
+
+## 0) Install Linux OS (required on new board)
+
+Perform these steps on a separate laptop/desktop first:
+
+1. Download one of:
+   - Debian 12 (amd64)
+   - Ubuntu Server 22.04/24.04 LTS (amd64)
+2. Flash the ISO to a USB drive (for example with Balena Etcher or Rufus).
+3. Connect keyboard, monitor, ethernet, and the USB installer to the ZimaBoard.
+4. Boot from USB and complete OS install:
+   - hostname: choose a stable name (example: `zimaboard-study-agents`)
+   - user: create a sudo-capable admin user
+   - disk: install to the internal SSD/eMMC you want to run Docker on
+   - network: DHCP is fine initially; static IP is optional
+   - packages: include `OpenSSH server`
+5. Reboot into the installed OS and log in.
+6. Confirm baseline:
+
+```bash
+uname -m
+cat /etc/os-release
+sudo -v
+```
+
+Expected:
+- `uname -m` returns `x86_64`
+- OS is Debian/Ubuntu
+- sudo works without errors
 
 ## 1) Clone and enter backend path
 

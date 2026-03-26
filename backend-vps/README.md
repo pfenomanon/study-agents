@@ -3,22 +3,18 @@
 Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, covering RAG chunking, CAG knowledge graph enrichment, Supabase vector storage, and MCP tooling for downstream question answering.
 
 ## Quick Links
-- `AGENTS_EXECUTION_PLAN.md`: execution order, system prompt, and what each agent does.
-- `AGENTS_COMPLETE_GUIDE.md`: deep-dive docs + troubleshooting.
-- `supabase_schema.sql`: create new Supabase tables/function before ingesting data.
-- `supabase/migrations/202603150001_profile_catalog.sql`: additive migration for profile namespaces + profile catalog.
-- `docs/PROFILE_API.md`: profile endpoint contracts used by Copilot UI/CLI.
+- `README_BACKEND_VPS_QUICKSTART.md`: fastest backend VPS setup path.
+- `DEPLOYMENT.md`: full Linux/AWS deployment details.
+- `supabase_schema.sql`: create required Supabase tables/functions before ingesting data.
 - `ZIMABOARD_16GB_DEPLOYMENT.md`: ZimaBoard-focused install, tuning, validation, and operations workflow.
 
 ## Packaging & Deployment Helpers
 
-- `package-linux.sh`: packages the repo into `dist/study-agents-<timestamp>.tar.gz`.
-- `package-windows.ps1`: builds `dist/study-agents-<timestamp>.zip`.
 - `scripts/build_release_bundles.py`: builds two reproducible multi-host artifacts:
   - `dist/study-agents-backend-vps-<timestamp>.tar.gz`
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
-- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `status`, `logs`, `stop`).
+- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `start-local-all`, `apply-schema`, `restart`, `status`, `logs`, `stop`).
 - `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
 - `scripts/generate_local_api_keys.sh`: generates local service auth tokens (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`) with compatible entropy/format.
 - `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
@@ -118,7 +114,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `GET /profiles/{profile_id}`
   - `POST /profiles`
   - `POST /profiles/use`
-  - Full request/response contracts: `docs/PROFILE_API.md`.
+  - Response payloads are defined in `src/study_agents/copilot_service.py`.
 
 ### Curation Workflow
 
@@ -158,7 +154,7 @@ Use `docker compose up --build` from this directory to spin up services. The Pyt
 - `utility-service`: base image kept running via `tail -f /dev/null` so you can `docker compose run utility-service ...` for any one-off CLI agent (web research, RAG ingestion, etc.) without rebuilding images.
 - `copilot-service` (port 9010): PydanticAI backend; now exposes `/copilot/capture` for capture + OCR + answer.
 - `copilot-frontend` (port 3000): CopilotKit UI with chat + Vision Capture card. Run on a machine with a display or attach a virtual display (Xvfb) if headless.
-- `tls-gateway` (ports 80/443): machine-terminated HTTPS reverse proxy. Set `PUBLIC_DOMAIN` and `ACME_EMAIL` in `.env`.
+- `tls-gateway` (port 443): machine-terminated HTTPS reverse proxy. Set `PUBLIC_DOMAIN` and `ACME_EMAIL` in `.env`.
 
 All services mount `.env`, `prompts/`, and the relevant `data/` folders so you can edit prompts or documents on the host and the containers see the changes immediately.
 
@@ -216,7 +212,7 @@ study-agents-mcp
 ## Getting Started
 
 1. Copy `.env.example` to `.env` and fill in your keys/models/URLs.
-2. Generate local service auth tokens (recommended defaults):
+2. Generate local service auth tokens (required with default auth settings):
    ```bash
    bash scripts/generate_local_api_keys.sh --write-env
    ```
@@ -229,7 +225,9 @@ study-agents-mcp
    ```bash
    study-agents-validate --print-summary
    ```
-5. Run `supabase_schema.sql` in your Supabase target (cloud or local).
+5. Run `supabase_schema.sql` in your Supabase target:
+   - Cloud: Supabase SQL Editor
+   - Local/CLI DSN path: `bash scripts/install_backend_vps.sh apply-schema`
 6. Start the pieces you need:
    - Individually (legacy): `study-agents-rag`, `study-agents-cag`, `study-agents-graph-inspector`, `study-agents-api`
    - Orchestration helper: `study-agents-manage run --services cag,api`

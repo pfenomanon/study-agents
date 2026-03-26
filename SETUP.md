@@ -30,7 +30,9 @@ Set at minimum:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 
-Generate local backend service tokens (recommended: 32-byte URL-safe keys):
+Token enforcement is enabled by default (`API_REQUIRE_TOKEN=true`, `RAG_REQUIRE_TOKEN=true`, `COPILOT_REQUIRE_TOKEN=true`).
+
+Generate local backend service tokens:
 
 ```bash
 bash scripts/generate_local_api_keys.sh --write-env
@@ -38,7 +40,16 @@ bash scripts/generate_local_api_keys.sh --write-env
 
 This generates `API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, and `SCENARIO_API_KEY`.
 
-## 4) Start backend stack
+## 4) Apply Supabase schema
+
+- Cloud: run `backend-vps/supabase_schema.sql` in Supabase SQL Editor.
+- CLI option: set `SUPABASE_DB_URL` in `.env` and run:
+
+```bash
+bash scripts/install_backend_vps.sh apply-schema
+```
+
+## 5) Start backend stack
 
 ```bash
 docker compose up -d --build
@@ -50,7 +61,7 @@ ZimaBoard/x86_64 16GB tuned path:
 bash scripts/install_zimaboard_16gb.sh start
 ```
 
-## 5) Optional root helper
+## 6) Optional root helper
 
 From repo root:
 

@@ -21,7 +21,13 @@ cp -n .env.example .env
 bash scripts/generate_local_api_keys.sh --write-env
 nano .env
 ```
-3. Start:
+3. Apply schema:
+- Cloud: run `supabase_schema.sql` in Supabase SQL Editor.
+- Optional CLI path: set `SUPABASE_DB_URL` in `.env`, then run:
+```bash
+bash scripts/install_backend_vps.sh apply-schema
+```
+4. Start:
 ```bash
 bash scripts/install_backend_vps.sh start
 ```

@@ -46,13 +46,18 @@ Populate required keys in `backend-vps/.env`:
 - `SUPABASE_URL`
 - `SUPABASE_KEY` (service role key recommended for backend writes/ingestion)
 
-Recommended security keys:
+Token defaults (enabled by default):
+- `API_REQUIRE_TOKEN=true`
+- `RAG_REQUIRE_TOKEN=true`
+- `COPILOT_REQUIRE_TOKEN=true`
+
+Service token keys:
 - `API_TOKEN`
 - `RAG_API_TOKEN`
 - `COPILOT_API_KEY`
 - optional `SCENARIO_API_KEY` (if scenario API is enabled)
 
-Generate local backend service tokens:
+Generate local backend service tokens (optional; `start` auto-generates missing required values):
 
 ```bash
 # Recommended: URL-safe tokens, 32 random bytes each
@@ -67,7 +72,17 @@ Compatibility guidance:
 Recommended memory setting for 16GB hosts:
 - `COPILOT_SERVICE_WORKERS=1`
 
-## 4) Start stack (build + run + validation)
+## 4) Apply Supabase schema
+
+Use one of these methods:
+- Supabase Cloud: run `supabase_schema.sql` in the Supabase SQL Editor.
+- CLI/DSN path: set `SUPABASE_DB_URL` in `.env`, then run:
+
+```bash
+bash scripts/install_backend_vps.sh apply-schema
+```
+
+## 5) Start stack (build + run + validation)
 
 ```bash
 bash scripts/install_zimaboard_16gb.sh start
@@ -99,7 +114,7 @@ bash scripts/install_zimaboard_16gb.sh start-tools
 bash scripts/install_zimaboard_16gb.sh start-vault
 ```
 
-## 5) Operational commands
+## 6) Operational commands
 
 ```bash
 # show status
@@ -115,7 +130,7 @@ bash scripts/install_zimaboard_16gb.sh validate
 bash scripts/install_zimaboard_16gb.sh stop
 ```
 
-## 6) Security gateway bootstrap (Authelia + TLS)
+## 7) Security gateway bootstrap (Authelia + TLS)
 
 If you are exposing the service externally (not VPN-only), bootstrap gateway auth before production use:
 
@@ -133,7 +148,7 @@ If unset, bootstrap auto-generates:
 - `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET` (64-char hex)
 - `docker/authelia/oidc_jwks_rs256.pem` (RSA-2048 signing key)
 
-## 7) Validation checklist
+## 8) Validation checklist
 
 Run:
 
@@ -150,15 +165,15 @@ Validation script checks:
   - `http://127.0.0.1:9010/copilot/chat`
   - `http://127.0.0.1:3000/`
 
-## 8) Recommended Zima workload profile
+## 9) Recommended Zima workload profile
 
 - Run backend stack directly on host Docker (no extra VM layer)
 - Keep Docker data and bind mounts on SSD
 - Leave swap enabled to absorb transient OCR/RAG spikes
 - Enable optional `utility-service` and `vault` only when needed
-- Keep remote access private (VPN/IP allowlists + API tokens)
+- Keep remote access private (VPN/IP allowlists + API tokens); expose only port `443`.
 
-## 9) Update procedure
+## 10) Update procedure
 
 ```bash
 cd /path/to/study-agents/backend-vps
@@ -166,7 +181,7 @@ git pull
 bash scripts/install_zimaboard_16gb.sh start
 ```
 
-## 10) Troubleshooting
+## 11) Troubleshooting
 
 - `docker permission denied` after `prepare`:
   - open a new shell session (docker group membership update).

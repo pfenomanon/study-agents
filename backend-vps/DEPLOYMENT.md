@@ -6,7 +6,7 @@ This repo can be moved to any Linux host (including AWS EC2) and run either nati
 - Python 3.11+
 - Docker + Docker Compose v2 (optional but recommended)
 - Network access to OpenAI/Ollama (if used) and Supabase
-- Ports to expose (typical): 8000 (CAG API), 8100 (RAG service), 9000 (Scenario API)
+- Ports to expose (typical): 443 (TLS gateway)
 - Display note: vision capture (local/remote_image) requires a display. On headless servers, use a virtual display (Xvfb) or run capture on a desktop/WSLg host and send images to the CAG OCR endpoint.
 
 ## Package → Host
@@ -36,9 +36,11 @@ python scripts/build_release_bundles.py
 2. Set required values:
    - `OPENAI_API_KEY` (and `OPENAI_EMBED_MODEL` if you want a different model)
    - `SUPABASE_URL`, `SUPABASE_KEY`
+   - Optional DB DSN for schema automation: `SUPABASE_DB_URL`
    - `OLLAMA_HOST`/`OLLAMA_API_KEY` if using Ollama cloud
    - `OLLAMA_REASON_MODEL` for default Ollama reasoning model (used when platform is `ollama` and no per-request model is supplied)
    - API auth tokens: `API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`
+   - Token-requirement defaults are enabled: `API_REQUIRE_TOKEN=true`, `RAG_REQUIRE_TOKEN=true`, `COPILOT_REQUIRE_TOKEN=true`
    - Gateway/Auth values: `PUBLIC_DOMAIN`, `ACME_EMAIL`, optional `GATEWAY_ALLOWED_CIDRS`
    - Optional toggles: `USE_HYBRID_RETRIEVAL=true`, `RAG_USE_DOCLING=true`
    - Optional security controls: request limits (`*_RATE_LIMIT_PER_MINUTE`), body limits (`COPILOT_MAX_BODY_BYTES`), path allowlists (`RAG_ALLOWED_*`, `COPILOT_ALLOWED_FILE_ROOTS`), and crawler SSRF guard (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`)
@@ -52,10 +54,13 @@ python scripts/build_release_bundles.py
      - Prefer URL-safe tokens (`A-Za-z0-9_-`, around 43 chars) or use 64-char hex.
      - Keep per-service keys distinct (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`; optional `SCENARIO_API_KEY`).
 3. Apply the schema to your Supabase project:
-   ```bash
-   psql "$SUPABASE_URL" < supabase_schema.sql
-   ```
-   or use the Supabase SQL console.
+   - Recommended: open Supabase SQL Editor and run `supabase_schema.sql`.
+   - Optional CLI method:
+     - set `SUPABASE_DB_URL` in `.env` (Postgres DSN)
+     - run:
+       ```bash
+       bash scripts/install_backend_vps.sh apply-schema
+       ```
 
 ## Run with Docker Compose (recommended)
 ```bash
@@ -76,7 +81,7 @@ Services:
 - `copilot-frontend` (port 3000): Next.js + CopilotKit UI (set `NEXT_PUBLIC_COPILOT_API`/`COPILOT_BACKEND_URL` if custom)
 - `redis`: session + login-regulation state for gateway auth
 - `authelia`: authentication portal/MFA and forward-auth backend
-- `tls-gateway` (ports 80/443): machine-terminated HTTPS endpoint for remote clients
+- `tls-gateway` (port 443): machine-terminated HTTPS endpoint for remote clients
 - Vision capture: UI card and `/copilot/capture` endpoint are available; they need a display. For headless use, post images to `/cag-ocr-answer` or run capture on a GUI host.
 
 Build model:
@@ -131,7 +136,7 @@ Common CLIs:
 - `study-agents-mcp` (MCP server over stdio)
 
 ## AWS Notes
-- Use a security group allowing only the needed ports (8000/8100/9000) from trusted IPs or via an ALB/reverse proxy (TLS termination recommended).
+- Use a security group allowing only required ingress (typically 443) from trusted IPs.
 - For EC2, install Docker + docker-compose-plugin (or use an AMI that already has them). The shared Python Dockerfile installs the `.[server]` profile (Docling OCR via RapidOCR/Tesseract, no EasyOCR by default).
 - The shared Python Docker build pins CPU-only `torch`/`torchvision` wheels and fails if CUDA/NVIDIA Python packages appear.
 - Store secrets in SSM Parameter Store/Secrets Manager and template them into `.env` at boot (e.g., via cloud-init or a systemd drop-in).

@@ -104,9 +104,10 @@ Important:
 - For backend/server usage, `SUPABASE_KEY` should be a service-role key.
 - If you use local Supabase and the helper had to fall back to anon key, replace it with service-role for full ingestion and write features.
 
-Recommended security hardening:
-- `API_TOKEN` for `/cag-answer` and `/cag-ocr-answer`
-- `COPILOT_API_KEY` for `/copilot/*`
+Default token requirements (enabled by default):
+- `API_REQUIRE_TOKEN=true`
+- `RAG_REQUIRE_TOKEN=true`
+- `COPILOT_REQUIRE_TOKEN=true`
 
 Generate local backend service tokens (installer/admin generated):
 
@@ -165,7 +166,9 @@ After you finish the wizard, continue with schema setup and service startup.
 
 ### 3.4 Create Supabase Schema
 
-Run `backend-vps/supabase_schema.sql` in the Supabase target selected above (cloud or local).
+Run `backend-vps/supabase_schema.sql` in the Supabase target selected above:
+- Supabase Cloud: SQL Editor.
+- CLI/DSN path: set `SUPABASE_DB_URL` in `.env`, then run `bash scripts/install_backend_vps.sh apply-schema`.
 
 ### 3.5 Start Services
 
@@ -188,10 +191,11 @@ For the local Supabase all-in-one path:
 bash scripts/install_backend_vps.sh start-local-all
 ```
 
-Default exposed ports:
+Default host bind ports (localhost-only):
 - `8000` `cag-service` (`/cag-answer`, `/cag-ocr-answer`)
 - `8100` `rag-service` (`/build`)
 - `9010` `copilot-service` (`/copilot/chat`, `/copilot/capture`, `/copilot/cag-process`)
+- `3000` `copilot-frontend`
 
 ### 3.6 What Runs in Docker
 
@@ -206,20 +210,20 @@ If using local Supabase mode, those Supabase containers run in parallel as a sep
 
 ### 3.7 Smoke Tests
 
-Without API token:
-
-```bash
-curl -X POST http://localhost:8000/cag-answer \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Return OK if service is reachable."}'
-```
-
-With API token enabled:
+With default token settings:
 
 ```bash
 curl -X POST http://localhost:8000/cag-answer \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <API_TOKEN>" \
+  -d '{"question":"Return OK if service is reachable."}'
+```
+
+If you explicitly disable token enforcement (`API_REQUIRE_TOKEN=false`):
+
+```bash
+curl -X POST http://localhost:8000/cag-answer \
+  -H "Content-Type: application/json" \
   -d '{"question":"Return OK if service is reachable."}'
 ```
 
@@ -235,23 +239,23 @@ docker compose down
 
 - Keep Supabase local ports bound to localhost unless you intentionally proxy them.
 - Do not expose Supabase Postgres/API ports directly to the public internet.
-- Keep only required app ports open externally (`8000`, `8100`, `9010` as needed).
+- Keep backend app ports localhost-only; expose only the TLS gateway (`443`) externally.
 - Always set `API_TOKEN`, `RAG_API_TOKEN`, and `COPILOT_API_KEY` in non-local deployments.
 - Rotate keys if shared accidentally.
 
 ### 3.10 Authentication and Encrypted Communication
 
 Authentication:
-- `cag-service` (`/cag-answer`, `/cag-ocr-answer`) enforces token auth when `API_TOKEN` is set.
-- `rag-service` (`/build`) enforces token auth when `RAG_API_TOKEN` is set (falls back to `API_TOKEN` if unset).
-- `copilot-service` (`/copilot/*`) enforces token auth when `COPILOT_API_KEY` is set.
+- `cag-service` (`/cag-answer`, `/cag-ocr-answer`) enforces token auth by default (`API_REQUIRE_TOKEN=true`).
+- `rag-service` (`/build`) enforces token auth by default (`RAG_REQUIRE_TOKEN=true`; accepts `RAG_API_TOKEN` or `API_TOKEN`).
+- `copilot-service` (`/copilot/*`) enforces token auth by default (`COPILOT_REQUIRE_TOKEN=true`; accepts `COPILOT_API_KEY` or `API_TOKEN`).
 - `scenario-api` enforces `SCENARIO_API_KEY` when enabled (falls back to `API_TOKEN` if unset).
 - Accepted client headers:
   - `X-API-Key: <token>`
   - `Authorization: Bearer <token>`
 
 Encryption in transit:
-- The default compose publishes plain HTTP ports (`8000`, `8100`, `9010`).
+- The default compose publishes localhost-only HTTP ports (`127.0.0.1:8000`, `127.0.0.1:8100`, `127.0.0.1:9010`, `127.0.0.1:3000`).
 - For internet-facing deployments, terminate TLS in front of these services (Caddy/Nginx/Traefik/ALB).
 - Use `https://` URLs from remote clients; do not expose Supabase Docker ports publicly.
 

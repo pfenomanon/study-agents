@@ -92,7 +92,7 @@ def _build_backend_bundle(workdir: Path) -> None:
 
     backend_quickstart = f"""# Backend VPS Quickstart
 
-Use this package on any new Linux VPS to run the backend services.
+Use this package on a new Debian/Ubuntu VPS.
 
 ## 1) Extract on VPS
 
@@ -101,43 +101,72 @@ tar -xzf {BACKEND_ARCHIVE.name}
 cd {BACKEND_BASENAME}
 ```
 
-## 2) Install dependencies
+## 2) Install host dependencies
 
 ```bash
 bash scripts/install_backend_vps.sh deps
 ```
 
-## 3) Configure environment
+## 3) Configure `.env`
 
 ```bash
 cp -n .env.example .env
 nano .env
 ```
 
-Minimum required keys in `.env`:
+Required values:
 - `OPENAI_API_KEY`
 - `SUPABASE_URL`
-- `SUPABASE_KEY`
+- `SUPABASE_KEY` (service-role key recommended)
 
-Optional security:
-- `API_TOKEN` (required by clients if set)
+Token defaults (important):
+- `API_REQUIRE_TOKEN=true`
+- `RAG_REQUIRE_TOKEN=true`
+- `COPILOT_REQUIRE_TOKEN=true`
 
-## 4) Start backend
+If required tokens are empty, the installer auto-generates and writes:
+- `API_TOKEN`
+- `RAG_API_TOKEN`
+- `COPILOT_API_KEY`
+- `SCENARIO_API_KEY`
+
+## 4) Apply Supabase schema
+
+Cloud Supabase (recommended):
+- Open Supabase SQL Editor.
+- Run `supabase_schema.sql`.
+
+CLI path (optional):
+- Set `SUPABASE_DB_URL` in `.env` (Postgres DSN), then run:
+
+```bash
+bash scripts/install_backend_vps.sh apply-schema
+```
+
+## 5) Start backend services
 
 ```bash
 bash scripts/install_backend_vps.sh start
 ```
 
-## 5) Verify and monitor
+## 6) Verify and monitor
 
 ```bash
 bash scripts/install_backend_vps.sh status
 bash scripts/install_backend_vps.sh logs
 ```
 
-Default endpoints:
-- `POST /cag-answer` on port `8000`
-- `POST /cag-ocr-answer` on port `8000`
+Default local ports (localhost-bound):
+- `127.0.0.1:8000` (`/cag-answer`, `/cag-ocr-answer`)
+- `127.0.0.1:8100` (`/build`)
+- `127.0.0.1:9010` (`/copilot/*`)
+- `127.0.0.1:3000` (Copilot UI)
+
+## Optional: local Supabase all-in-one mode
+
+```bash
+bash scripts/install_backend_vps.sh start-local-all
+```
 """
     _write_text(backend_root / "README_BACKEND_VPS_QUICKSTART.md", backend_quickstart)
     _add_dir_to_targz(BACKEND_ARCHIVE, backend_root)
@@ -341,9 +370,16 @@ cd {BACKEND_BASENAME}
 ```bash
 bash scripts/install_backend_vps.sh deps
 cp -n .env.example .env
+bash scripts/generate_local_api_keys.sh --write-env
 nano .env
 ```
-3. Start:
+3. Apply schema:
+- Cloud: run `supabase_schema.sql` in Supabase SQL Editor.
+- Optional CLI path: set `SUPABASE_DB_URL` in `.env`, then run:
+```bash
+bash scripts/install_backend_vps.sh apply-schema
+```
+4. Start:
 ```bash
 bash scripts/install_backend_vps.sh start
 ```

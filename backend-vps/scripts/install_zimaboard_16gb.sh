@@ -48,6 +48,34 @@ is_debian_like() {
   [[ -f /etc/debian_version ]]
 }
 
+lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+is_true() {
+  local raw
+  raw="$(lower "${1:-}")"
+  case "$raw" in
+    1|true|yes|on)
+      return 0
+      ;;
+    0|false|no|off)
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_placeholder_value() {
+  local value="$1"
+  [[ -z "$value" ]] && return 0
+  [[ "$value" == your-* ]] && return 0
+  [[ "$value" == "<"* ]] && return 0
+  return 1
+}
+
 compose() {
   docker compose -f "${BASE_COMPOSE_FILE}" -f "${ZIMA_COMPOSE_FILE}" "$@"
 }
@@ -93,11 +121,12 @@ validate_required_env() {
   local key value
   for key in OPENAI_API_KEY SUPABASE_URL SUPABASE_KEY; do
     value="$(awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' .env)"
-    if [[ -z "${value}" || "${value}" == your-* ]]; then
+    if is_placeholder_value "${value}"; then
       echo "Missing or placeholder value in .env: ${key}" >&2
       missing=1
     fi
   done
+  ensure_required_tokens
   (( missing == 0 )) || die "Populate required .env values before start."
 }
 
@@ -107,8 +136,67 @@ install_deps() {
   fi
   log "Installing host dependencies..."
   run_root apt-get update -y
-  run_root apt-get install -y docker.io docker-compose-plugin curl jq ca-certificates
+  run_root apt-get install -y docker.io docker-compose-plugin curl jq ca-certificates python3
   run_root systemctl enable --now docker
+}
+
+token_required() {
+  local key="$1"
+  local default_true="${2:-true}"
+  local raw
+  raw="$(awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' .env)"
+  if [[ -z "${raw}" ]]; then
+    is_true "${default_true}"
+    return
+  fi
+  is_true "${raw}"
+}
+
+ensure_required_tokens() {
+  local need_generate=0
+  local api_token rag_token copilot_key
+  local api_required=0 rag_required=0 copilot_required=0
+
+  api_token="$(awk -F= '$1 == "API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
+  rag_token="$(awk -F= '$1 == "RAG_API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
+  copilot_key="$(awk -F= '$1 == "COPILOT_API_KEY" {print substr($0, index($0, $2)); exit}' .env)"
+
+  if token_required API_REQUIRE_TOKEN true; then
+    api_required=1
+    if [[ -z "${api_token}" ]]; then
+      need_generate=1
+    fi
+  fi
+  if token_required RAG_REQUIRE_TOKEN true; then
+    rag_required=1
+    if [[ -z "${rag_token}" && -z "${api_token}" ]]; then
+      need_generate=1
+    fi
+  fi
+  if token_required COPILOT_REQUIRE_TOKEN true; then
+    copilot_required=1
+    if [[ -z "${copilot_key}" && -z "${api_token}" ]]; then
+      need_generate=1
+    fi
+  fi
+
+  if (( need_generate == 1 )); then
+    log "Generating missing service tokens in .env..."
+    bash "${SCRIPT_DIR}/generate_local_api_keys.sh" --write-env >/dev/null
+    api_token="$(awk -F= '$1 == "API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
+    rag_token="$(awk -F= '$1 == "RAG_API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
+    copilot_key="$(awk -F= '$1 == "COPILOT_API_KEY" {print substr($0, index($0, $2)); exit}' .env)"
+  fi
+
+  if (( api_required == 1 )) && [[ -z "${api_token}" ]]; then
+    die "API_REQUIRE_TOKEN=true but API_TOKEN is empty. Set API_TOKEN or set API_REQUIRE_TOKEN=false."
+  fi
+  if (( rag_required == 1 )) && [[ -z "${rag_token}" && -z "${api_token}" ]]; then
+    die "RAG_REQUIRE_TOKEN=true but both RAG_API_TOKEN and API_TOKEN are empty."
+  fi
+  if (( copilot_required == 1 )) && [[ -z "${copilot_key}" && -z "${api_token}" ]]; then
+    die "COPILOT_REQUIRE_TOKEN=true but both COPILOT_API_KEY and API_TOKEN are empty."
+  fi
 }
 
 ensure_docker_group_access() {

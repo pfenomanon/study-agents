@@ -17,6 +17,9 @@ git clone git@github.com:pfenomanon/study-agents.git
 cd study-agents/backend-vps
 cp .env.example .env
 bash scripts/generate_local_api_keys.sh --write-env
+# Apply supabase_schema.sql in Supabase SQL Editor.
+# Optional CLI path (needs SUPABASE_DB_URL in .env):
+# bash scripts/install_backend_vps.sh apply-schema
 docker compose up -d --build
 ```
 

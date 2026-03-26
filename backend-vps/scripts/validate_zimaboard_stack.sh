@@ -78,11 +78,21 @@ main() {
   check_required_services
   compose ps
 
-  local api_token copilot_key auth_header_cag=() auth_header_copilot=()
+  local api_token rag_token copilot_key auth_header_cag=() auth_header_rag=() auth_header_copilot=()
   api_token="$(env_value API_TOKEN)"
+  rag_token="$(env_value RAG_API_TOKEN)"
   copilot_key="$(env_value COPILOT_API_KEY)"
+  if [[ -z "${rag_token}" ]]; then
+    rag_token="${api_token}"
+  fi
+  if [[ -z "${copilot_key}" ]]; then
+    copilot_key="${api_token}"
+  fi
   if [[ -n "${api_token}" ]]; then
     auth_header_cag=(-H "X-API-Key: ${api_token}")
+  fi
+  if [[ -n "${rag_token}" ]]; then
+    auth_header_rag=(-H "X-API-Key: ${rag_token}")
   fi
   if [[ -n "${copilot_key}" ]]; then
     auth_header_copilot=(-H "X-API-Key: ${copilot_key}")
@@ -102,7 +112,7 @@ main() {
     "400,401,403,404,422" \
     -X POST "http://127.0.0.1:8100/build" \
     -H "Content-Type: application/json" \
-    "${auth_header_cag[@]}" \
+    "${auth_header_rag[@]}" \
     --data '{}'
 
   check_http_code \

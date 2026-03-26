@@ -5,7 +5,9 @@ set -euo pipefail
 # Usage:
 #   bash scripts/install_backend_vps.sh deps
 #   bash scripts/install_backend_vps.sh start
+#   bash scripts/install_backend_vps.sh deploy
 #   bash scripts/install_backend_vps.sh start-local-all
+#   bash scripts/install_backend_vps.sh validate
 #   bash scripts/install_backend_vps.sh status
 #   bash scripts/install_backend_vps.sh logs
 #   bash scripts/install_backend_vps.sh stop
@@ -17,14 +19,16 @@ cd "$ROOT_DIR"
 
 if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
   cat <<'EOF'
-Usage: bash scripts/install_backend_vps.sh [deps|start|start-local-all|apply-schema|restart|status|logs|stop]
+Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|apply-schema|restart|validate|status|logs|stop]
 
 Actions:
-  deps             Install Docker + Compose plugin and create .env if missing
+  deps             Install host dependencies and create .env if missing
   start            Validate env + run docker compose up -d --build
+  deploy           deps + start + backend validation checks (recommended)
   start-local-all  Install deps + start local Supabase + apply schema + start backend stack
   apply-schema     Apply supabase_schema.sql using SUPABASE_DB_URL (or detected local DB URL)
   restart          Restart stack
+  validate         Validate running stack services and endpoints
   status           Show docker compose ps
   logs             Tail cag-service logs
   stop             Stop stack
@@ -149,10 +153,21 @@ install_deps() {
   ensure_pkg docker-compose-plugin
   ensure_pkg curl
   ensure_pkg ca-certificates
+  ensure_pkg git
+  ensure_pkg openssl
   ensure_pkg postgresql-client
   ensure_pkg jq
   ensure_pkg python3
+  ensure_pkg python3-venv
   ensure_pkg unzip
+
+  if command -v systemctl >/dev/null 2>&1; then
+    $SUDO systemctl enable --now docker || true
+  fi
+
+  if ! (docker info >/dev/null 2>&1 || $SUDO docker info >/dev/null 2>&1); then
+    die "Docker Engine is installed but not reachable. Check docker service status."
+  fi
 
   if ! docker compose version >/dev/null 2>&1; then
     die "docker compose plugin is not available after dependency install."
@@ -374,6 +389,21 @@ validate_runtime_env() {
   ensure_required_tokens
 }
 
+run_stack_validation() {
+  local validator="${SCRIPT_DIR}/validate_backend_stack.sh"
+  if [[ ! -f "$validator" ]]; then
+    die "Missing validator script: ${validator}"
+  fi
+  chmod +x "$validator"
+
+  log "Running backend stack validation..."
+  if docker compose ps >/dev/null 2>&1; then
+    bash "$validator"
+  else
+    $SUDO bash "$validator"
+  fi
+}
+
 dc() {
   if docker compose version >/dev/null 2>&1; then
     if docker compose ps >/dev/null 2>&1; then
@@ -398,6 +428,14 @@ case "$ACTION" in
     dc up -d --build
     dc ps
     ;;
+  deploy)
+    install_deps
+    validate_runtime_env
+    log "Deploying backend stack..."
+    dc up -d --build
+    dc ps
+    run_stack_validation
+    ;;
   start-local-all)
     install_deps
     install_supabase_cli
@@ -408,6 +446,7 @@ case "$ACTION" in
     log "Starting backend stack..."
     dc up -d --build
     dc ps
+    run_stack_validation
     ;;
   apply-schema)
     install_deps
@@ -423,6 +462,12 @@ case "$ACTION" in
     dc down
     dc up -d --build
     dc ps
+    run_stack_validation
+    ;;
+  validate)
+    ensure_env_file
+    validate_runtime_env
+    run_stack_validation
     ;;
   status)
     dc ps

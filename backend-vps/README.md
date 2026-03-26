@@ -14,7 +14,8 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-backend-vps-<timestamp>.tar.gz`
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
-- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `start-local-all`, `apply-schema`, `restart`, `status`, `logs`, `stop`).
+- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `deploy`, `start-local-all`, `apply-schema`, `restart`, `validate`, `status`, `logs`, `stop`).
+- `scripts/validate_backend_stack.sh`: waits for required containers and runs HTTP smoke checks for CAG/RAG/Copilot/frontend endpoints.
 - `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
 - `scripts/generate_local_api_keys.sh`: generates local service auth tokens (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`) with compatible entropy/format.
 - `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).

@@ -15,7 +15,11 @@ cd study-agents-backend-vps-<timestamp>
 bash scripts/install_backend_vps.sh deps
 ```
 
-This installs Docker Engine, Docker Compose plugin, and helper packages (`curl`, `jq`, `python3`, `postgresql-client`).
+This installs Docker Engine, Docker Compose plugin, and helper packages (`curl`, `jq`, `python3`, `python3-venv`, `postgresql-client`, `git`, `openssl`, `unzip`).
+
+Runtime versions used by the services:
+- Python service containers: `python:3.11-slim` (pinned in `docker/python.Dockerfile`)
+- Copilot frontend container: `node:20-alpine` (pinned in `docker/copilot-frontend.Dockerfile`)
 
 ## 3) Configure `.env`
 
@@ -61,6 +65,12 @@ bash scripts/install_backend_vps.sh apply-schema
 
 ## 5) Start backend services
 
+Recommended (build + start + health validation):
+```bash
+bash scripts/install_backend_vps.sh deploy
+```
+
+Equivalent manual start (without the full deploy wrapper):
 ```bash
 bash scripts/install_backend_vps.sh start
 ```
@@ -70,7 +80,34 @@ bash scripts/install_backend_vps.sh start
 ```bash
 bash scripts/install_backend_vps.sh status
 bash scripts/install_backend_vps.sh logs
+bash scripts/install_backend_vps.sh validate
 ```
+
+## 7) Dummy-proof copy/paste flow (fresh host)
+
+Run these exactly, in order:
+
+```bash
+# 0) enter project directory
+cd /path/to/study-agents/backend-vps
+
+# 1) install host dependencies + scaffold .env if missing
+bash scripts/install_backend_vps.sh deps
+
+# 2) open .env and fill required values (must not be placeholders)
+nano .env
+
+# 3) deploy and run smoke checks
+bash scripts/install_backend_vps.sh deploy
+
+# 4) confirm services are up
+bash scripts/install_backend_vps.sh status
+```
+
+Success criteria after step 3:
+- No `ERROR:` lines from the installer.
+- `deploy` ends with `Validation complete: backend services are reachable.`
+- `status` shows `cag-service`, `rag-service`, `copilot-service`, `copilot-frontend`, `redis`, `authelia`, `tls-gateway` as running.
 
 Default local ports (localhost-bound):
 - `127.0.0.1:8000` (`/cag-answer`, `/cag-ocr-answer`)

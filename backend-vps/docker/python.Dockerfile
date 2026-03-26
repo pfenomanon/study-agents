@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml supabase_schema.sql README.md AGENTS_EXECUTION_PLAN.md COMMANDS_REFERENCE.md CAG_CHUNKING_STRATEGY.md ./
+COPY pyproject.toml supabase_schema.sql README.md ./
 COPY prompts ./prompts
 COPY domain ./domain
 COPY src ./src

@@ -3,11 +3,14 @@
 This repo can be moved to any Linux host (including AWS EC2) and run either natively or via Docker Compose.
 
 ## Prereqs
-- Python 3.11+
+- Python 3.11+ (required only for native/venv deployment path)
 - Docker + Docker Compose v2 (optional but recommended)
 - Network access to OpenAI/Ollama (if used) and Supabase
 - Ports to expose (typical): 443 (TLS gateway)
 - Display note: vision capture (local/remote_image) requires a display. On headless servers, use a virtual display (Xvfb) or run capture on a desktop/WSLg host and send images to the CAG OCR endpoint.
+- Service runtime versions are container-pinned:
+  - Python APIs/builders: `python:3.11-slim`
+  - Copilot frontend: `node:20-alpine`
 
 ## Package → Host
 1. Copy the tarball from `dist/`, e.g. `study-agents-YYYYMMDDHHMMSS.tar.gz`, to the target host:
@@ -63,6 +66,12 @@ python scripts/build_release_bundles.py
        ```
 
 ## Run with Docker Compose (recommended)
+Recommended orchestrated deploy (installs host deps, validates `.env`, starts stack, and runs smoke checks):
+```bash
+bash scripts/install_backend_vps.sh deploy
+```
+
+Direct compose path:
 ```bash
 docker compose up -d --build
 ```
@@ -158,6 +167,11 @@ curl -X POST https://<domain>/cag-answer \
 Logs:
 - Docker: `docker compose logs -f cag-service`
 - Native: check `scenario_api.log`, `frontend_dev.log`, and per-agent stderr/stdout.
+
+Re-run stack validation checks at any time:
+```bash
+bash scripts/install_backend_vps.sh validate
+```
 
 Safe Docker cleanup (no data-volume deletion):
 ```bash

@@ -95,6 +95,11 @@ psql "$(awk -F= '/^SUPABASE_DB_URL=/{print $2}' .env)" -v ON_ERROR_STOP=1 -f sup
 sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_vault_nondev.sh'
 ```
 
+Vault bootstrap now applies Vault-first hardening:
+- runtime secrets synced to Vault are scrubbed from `.env`
+- backup is saved to `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`
+- plaintext env fallback remains off unless `ALLOW_PLAINTEXT_ENV_SECRETS=true`
+
 ### 1.8 Start backend stack
 
 ```bash

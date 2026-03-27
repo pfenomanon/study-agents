@@ -48,6 +48,7 @@ python scripts/build_release_bundles.py
    - Gateway/Auth values: `PUBLIC_DOMAIN`, `ACME_EMAIL`, optional `GATEWAY_ALLOWED_CIDRS`
    - Authelia user mode: `AUTHELIA_USERS_SOURCE=file` (recommended) or `env`
    - Vault runtime values (non-dev flow): `VAULT_ADDR`, `VAULT_CACERT`, `VAULT_AUTH_METHOD=approle`, `VAULT_ROLE_ID_FILE`, `VAULT_SECRET_ID_FILE`
+   - Vault hardening toggles: `ALLOW_PLAINTEXT_ENV_SECRETS=false`, `VAULT_SCRUB_ENV_SECRETS=true`
    - Vault UI OIDC client values: `AUTHELIA_VAULT_OIDC_CLIENT_ID`, `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`, `AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI`
    - Optional toggles: `USE_HYBRID_RETRIEVAL=true`, `RAG_USE_DOCLING=true`
    - Optional security controls: request limits (`*_RATE_LIMIT_PER_MINUTE`), body limits (`COPILOT_MAX_BODY_BYTES`), path allowlists (`RAG_ALLOWED_*`, `COPILOT_ALLOWED_FILE_ROOTS`), and crawler SSRF guard (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`)
@@ -183,6 +184,7 @@ This action:
 - Configures Vault OIDC auth using your existing Authelia IdP/gateway flow for Vault UI admin login
 - Recreates auth gateway services and validates required Vault UI/OIDC popup routes
 - Syncs non-placeholder `.env` secrets into `kv/study-agents/*`
+- Scrubs synced runtime secrets from `.env` for Vault-first runtime (backup saved to `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`)
 - Recreates runtime services to consume Vault via AppRole (`VAULT_AUTH_METHOD=approle`)
 
 Vault UI OIDC sign-in fields:

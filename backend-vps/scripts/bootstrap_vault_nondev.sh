@@ -10,6 +10,7 @@ INIT_FILE="${INIT_DIR}/init.json"
 ROLE_ID_FILE="${RUNTIME_DIR}/role_id"
 SECRET_ID_FILE="${RUNTIME_DIR}/secret_id"
 CADDY_ROOT_CA="${INIT_DIR}/caddy-root.crt"
+ENV_BACKUP_PATH=""
 
 COMPOSE_FILES=("${ROOT_DIR}/docker-compose.yml")
 if [[ -f "${ROOT_DIR}/docker-compose.zimaboard.yml" ]]; then
@@ -71,6 +72,16 @@ set_env() {
   mv "${tmp}" "${ENV_FILE}"
 }
 
+backup_env_once() {
+  if [[ -n "${ENV_BACKUP_PATH}" ]]; then
+    return 0
+  fi
+  ENV_BACKUP_PATH="${INIT_DIR}/env-pre-vault-scrub-$(date -u +%Y%m%dT%H%M%SZ).bak"
+  umask 077
+  cp "${ENV_FILE}" "${ENV_BACKUP_PATH}"
+  chmod 600 "${ENV_BACKUP_PATH}" || true
+}
+
 unset_env() {
   local key="$1"
   [[ -f "${ENV_FILE}" ]] || return 0
@@ -104,6 +115,19 @@ vault_root() {
     VAULT_CACERT="/tls/vault-ca.pem" \
     VAULT_TOKEN="${token}" \
     "$@"
+}
+
+write_vault_policy_from_host() {
+  local token="$1"
+  local policy_name="$2"
+  local policy_file="$3"
+
+  [[ -f "${policy_file}" ]] || die "Missing policy file: ${policy_file}"
+  dc exec -T vault env \
+    VAULT_ADDR="https://127.0.0.1:8200" \
+    VAULT_CACERT="/tls/vault-ca.pem" \
+    VAULT_TOKEN="${token}" \
+    sh -lc "cat > /tmp/${policy_name}.hcl && vault policy write ${policy_name} /tmp/${policy_name}.hcl" < "${policy_file}"
 }
 
 ensure_gateway_cidr_contains_backend_subnet() {
@@ -151,6 +175,16 @@ sync_env_secret_to_vault() {
   log "Synced ${env_key} -> ${vault_path}"
 }
 
+scrub_env_secret_for_vault_first() {
+  local env_key="$1"
+  if [[ -z "$(get_env "${env_key}")" ]]; then
+    return 0
+  fi
+  backup_env_once
+  set_env "${env_key}" ""
+  log "Removed plaintext ${env_key} from .env (Vault-first mode)."
+}
+
 main() {
   require_cmd docker
   require_cmd jq
@@ -174,6 +208,8 @@ main() {
   set_env VAULT_AUTH_METHOD "approle"
   set_env VAULT_ROLE_ID_FILE "/vault/bootstrap/role_id"
   set_env VAULT_SECRET_ID_FILE "/vault/bootstrap/secret_id"
+  set_env ALLOW_PLAINTEXT_ENV_SECRETS "false"
+  set_env VAULT_SCRUB_ENV_SECRETS "true"
   unset_env VAULT_TOKEN
   unset_env VAULT_DEV_ROOT_TOKEN_ID
 
@@ -239,8 +275,8 @@ main() {
     vault_root "${root_token}" vault secrets enable -path=kv kv-v2 >/dev/null
   fi
 
-  vault_root "${root_token}" vault policy write study-agents-runtime /vault/policies/study-agents-runtime.hcl >/dev/null
-  vault_root "${root_token}" vault policy write vault-admin /vault/policies/vault-admin.hcl >/dev/null
+  write_vault_policy_from_host "${root_token}" study-agents-runtime "${ROOT_DIR}/docker/vault/policies/study-agents-runtime.hcl" >/dev/null
+  write_vault_policy_from_host "${root_token}" vault-admin "${ROOT_DIR}/docker/vault/policies/vault-admin.hcl" >/dev/null
 
   if ! vault_root "${root_token}" vault auth list -format=json | jq -e 'has("approle/")' >/dev/null; then
     vault_root "${root_token}" vault auth enable approle >/dev/null
@@ -272,6 +308,21 @@ main() {
   sync_env_secret_to_vault "${root_token}" COPILOT_API_KEY kv/study-agents/copilot-api-key
   sync_env_secret_to_vault "${root_token}" SCENARIO_SUPABASE_URL kv/study-agents/scenario-supabase-url
   sync_env_secret_to_vault "${root_token}" SCENARIO_SUPABASE_KEY kv/study-agents/scenario-supabase-key
+
+  if is_true "${VAULT_SCRUB_ENV_SECRETS:-true}"; then
+    log "Scrubbing plaintext runtime secrets from .env (backup retained)..."
+    scrub_env_secret_for_vault_first OPENAI_API_KEY
+    scrub_env_secret_for_vault_first SUPABASE_URL
+    scrub_env_secret_for_vault_first SUPABASE_KEY
+    scrub_env_secret_for_vault_first API_TOKEN
+    scrub_env_secret_for_vault_first RAG_API_TOKEN
+    scrub_env_secret_for_vault_first SCENARIO_API_KEY
+    scrub_env_secret_for_vault_first COPILOT_API_KEY
+    scrub_env_secret_for_vault_first SCENARIO_SUPABASE_URL
+    scrub_env_secret_for_vault_first SCENARIO_SUPABASE_KEY
+  else
+    log "Keeping plaintext .env secrets (VAULT_SCRUB_ENV_SECRETS=${VAULT_SCRUB_ENV_SECRETS:-unset})."
+  fi
 
   local public_domain vault_oidc_client_id vault_oidc_client_secret vault_oidc_redirect
   public_domain="$(get_env PUBLIC_DOMAIN)"
@@ -351,6 +402,9 @@ main() {
   echo "  approle secret_id: ${SECRET_ID_FILE}"
   echo "  VAULT_ADDR in .env: $(get_env VAULT_ADDR)"
   echo "  VAULT_AUTH_METHOD in .env: $(get_env VAULT_AUTH_METHOD)"
+  if [[ -n "${ENV_BACKUP_PATH}" ]]; then
+    echo "  pre-scrub env backup: ${ENV_BACKUP_PATH}"
+  fi
   if [[ -n "${public_domain}" ]]; then
     echo "  Vault UI OIDC login: https://${public_domain}/ui/"
     echo "  Vault UI OIDC fields: Method=OIDC, Role=vault-admin, Mount path=oidc"

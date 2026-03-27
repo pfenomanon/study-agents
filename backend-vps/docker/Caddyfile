@@ -37,13 +37,23 @@
         handle @allowlisted {
             @authelia path /authelia*
             handle @authelia {
-                reverse_proxy authelia:9091
+                reverse_proxy https://authelia:9091 {
+                    transport http {
+                        tls_server_name authelia
+                        tls_insecure_skip_verify
+                    }
+                }
             }
 
             # OIDC endpoints must be reachable without an existing app session.
             @authelia_oidc path /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /oauth2/* /consent/* /static/* /manifest.json /favicon.ico /api/state* /api/firstfactor* /api/secondfactor* /api/user/* /api/webauthn/* /api/reset-password/*
             handle @authelia_oidc {
-                reverse_proxy authelia:9091
+                reverse_proxy https://authelia:9091 {
+                    transport http {
+                        tls_server_name authelia
+                        tls_insecure_skip_verify
+                    }
+                }
             }
 
             # Route Vault UI and API directly to Vault.
@@ -80,9 +90,13 @@
             @protected {
                 not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /oauth2/* /consent/* /static/* /manifest.json /favicon.ico /api/state* /api/firstfactor* /api/secondfactor* /api/user/* /api/webauthn/* /api/reset-password/* /cag-answer /cag-ocr-answer /capture-session* /ui* /v1*
             }
-            forward_auth @protected authelia:9091 {
+            forward_auth @protected https://authelia:9091 {
                 uri /api/authz/forward-auth
                 copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+                transport http {
+                    tls_server_name authelia
+                    tls_insecure_skip_verify
+                }
             }
 
             @rag path /build

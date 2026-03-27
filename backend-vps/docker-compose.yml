@@ -138,6 +138,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./research_output:/app/research_output
+      - env-vol:/env:ro
     ports:
       - "127.0.0.1:3000:3000"
     networks:
@@ -159,6 +160,7 @@ services:
       - redis
     volumes:
       - ./docker/authelia:/config
+      - ./docker/internal-tls:/tls:ro
     networks:
       - backend
     restart: unless-stopped

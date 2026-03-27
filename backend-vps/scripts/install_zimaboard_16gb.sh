@@ -76,6 +76,34 @@ is_placeholder_value() {
   return 1
 }
 
+env_value() {
+  local key="$1"
+  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' .env 2>/dev/null || true
+}
+
+vault_approle_ready() {
+  local auth_method role_id_file secret_id_file
+  auth_method="$(env_value VAULT_AUTH_METHOD)"
+  [[ -n "${auth_method}" ]] || auth_method="token"
+  if [[ "${auth_method}" != "approle" ]]; then
+    return 1
+  fi
+
+  role_id_file="$(env_value VAULT_ROLE_ID_FILE)"
+  secret_id_file="$(env_value VAULT_SECRET_ID_FILE)"
+  [[ -n "${role_id_file}" ]] || role_id_file="/vault/bootstrap/role_id"
+  [[ -n "${secret_id_file}" ]] || secret_id_file="/vault/bootstrap/secret_id"
+
+  if [[ "${role_id_file}" == "/vault/bootstrap/role_id" ]]; then
+    role_id_file="${ROOT_DIR}/docker/vault/runtime/role_id"
+  fi
+  if [[ "${secret_id_file}" == "/vault/bootstrap/secret_id" ]]; then
+    secret_id_file="${ROOT_DIR}/docker/vault/runtime/secret_id"
+  fi
+
+  [[ -s "${role_id_file}" && -s "${secret_id_file}" ]]
+}
+
 compose() {
   docker compose -f "${BASE_COMPOSE_FILE}" -f "${ZIMA_COMPOSE_FILE}" "$@"
 }
@@ -112,15 +140,19 @@ ensure_env_file() {
   if [[ ! -f .env ]]; then
     cp .env.example .env
     log "Created .env from .env.example"
-    log "Edit .env with OPENAI_API_KEY, SUPABASE_URL, SUPABASE_KEY before start."
+    log "Edit .env with OPENAI_API_KEY, SUPABASE_URL, SUPABASE_KEY before start, or bootstrap Vault AppRole first."
   fi
 }
 
 validate_required_env() {
   local missing=0
   local key value
+  if vault_approle_ready; then
+    ensure_required_tokens
+    return 0
+  fi
   for key in OPENAI_API_KEY SUPABASE_URL SUPABASE_KEY; do
-    value="$(awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' .env)"
+    value="$(env_value "${key}")"
     if is_placeholder_value "${value}"; then
       echo "Missing or placeholder value in .env: ${key}" >&2
       missing=1
@@ -144,7 +176,7 @@ token_required() {
   local key="$1"
   local default_true="${2:-true}"
   local raw
-  raw="$(awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' .env)"
+  raw="$(env_value "${key}")"
   if [[ -z "${raw}" ]]; then
     is_true "${default_true}"
     return
@@ -153,13 +185,17 @@ token_required() {
 }
 
 ensure_required_tokens() {
+  if vault_approle_ready; then
+    return 0
+  fi
+
   local need_generate=0
   local api_token rag_token copilot_key
   local api_required=0 rag_required=0 copilot_required=0
 
-  api_token="$(awk -F= '$1 == "API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
-  rag_token="$(awk -F= '$1 == "RAG_API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
-  copilot_key="$(awk -F= '$1 == "COPILOT_API_KEY" {print substr($0, index($0, $2)); exit}' .env)"
+  api_token="$(env_value API_TOKEN)"
+  rag_token="$(env_value RAG_API_TOKEN)"
+  copilot_key="$(env_value COPILOT_API_KEY)"
 
   if token_required API_REQUIRE_TOKEN true; then
     api_required=1
@@ -183,9 +219,9 @@ ensure_required_tokens() {
   if (( need_generate == 1 )); then
     log "Generating missing service tokens in .env..."
     bash "${SCRIPT_DIR}/generate_local_api_keys.sh" --write-env >/dev/null
-    api_token="$(awk -F= '$1 == "API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
-    rag_token="$(awk -F= '$1 == "RAG_API_TOKEN" {print substr($0, index($0, $2)); exit}' .env)"
-    copilot_key="$(awk -F= '$1 == "COPILOT_API_KEY" {print substr($0, index($0, $2)); exit}' .env)"
+    api_token="$(env_value API_TOKEN)"
+    rag_token="$(env_value RAG_API_TOKEN)"
+    copilot_key="$(env_value COPILOT_API_KEY)"
   fi
 
   if (( api_required == 1 )) && [[ -z "${api_token}" ]]; then

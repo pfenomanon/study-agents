@@ -13,6 +13,10 @@ VAULT_CSR="${TLS_DIR}/vault.csr"
 VAULT_CERT="${TLS_DIR}/vault.crt"
 VAULT_EXT="${TLS_DIR}/vault.ext"
 VAULT_CA_PEM="${TLS_DIR}/vault-ca.pem"
+AUTHELIA_KEY="${TLS_DIR}/authelia.key"
+AUTHELIA_CSR="${TLS_DIR}/authelia.csr"
+AUTHELIA_CERT="${TLS_DIR}/authelia.crt"
+AUTHELIA_EXT="${TLS_DIR}/authelia.ext"
 
 mkdir -p "${TLS_DIR}"
 mkdir -p "${VAULT_TRUST_DIR}"
@@ -57,15 +61,43 @@ if [[ ! -s "${VAULT_KEY}" || ! -s "${VAULT_CERT}" ]]; then
     -out "${VAULT_CERT}" -days 825 -sha256 -extfile "${VAULT_EXT}"
 fi
 
+if [[ ! -s "${AUTHELIA_KEY}" || ! -s "${AUTHELIA_CERT}" ]]; then
+  PUBLIC_DOMAIN="$(get_env PUBLIC_DOMAIN)"
+
+  openssl genrsa -out "${AUTHELIA_KEY}" 2048
+  openssl req -new -key "${AUTHELIA_KEY}" -subj "/CN=authelia" -out "${AUTHELIA_CSR}"
+
+  {
+    echo "authorityKeyIdentifier=keyid,issuer"
+    echo "basicConstraints=CA:FALSE"
+    echo "keyUsage=digitalSignature,keyEncipherment"
+    echo "extendedKeyUsage=serverAuth"
+    printf 'subjectAltName=DNS:authelia,DNS:localhost,IP:127.0.0.1'
+    if [[ -n "${PUBLIC_DOMAIN}" ]]; then
+      if [[ "${PUBLIC_DOMAIN}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        printf ',IP:%s' "${PUBLIC_DOMAIN}"
+      else
+        printf ',DNS:%s' "${PUBLIC_DOMAIN}"
+      fi
+    fi
+    printf '\n'
+  } > "${AUTHELIA_EXT}"
+
+  openssl x509 -req -in "${AUTHELIA_CSR}" -CA "${CA_CERT}" -CAkey "${CA_KEY}" -CAcreateserial \
+    -out "${AUTHELIA_CERT}" -days 825 -sha256 -extfile "${AUTHELIA_EXT}"
+fi
+
 cp "${CA_CERT}" "${VAULT_CA_PEM}"
 cp "${CA_CERT}" "${VAULT_TRUST_DIR}/vault-ca.pem"
 
 chmod 600 "${CA_KEY}" || true
-chmod 644 "${VAULT_KEY}" "${CA_CERT}" "${VAULT_CERT}" "${VAULT_CA_PEM}" || true
+chmod 644 "${VAULT_KEY}" "${VAULT_CERT}" "${AUTHELIA_KEY}" "${AUTHELIA_CERT}" "${CA_CERT}" "${VAULT_CA_PEM}" || true
 chmod 644 "${VAULT_TRUST_DIR}/vault-ca.pem" || true
-rm -f "${VAULT_CSR}" "${VAULT_EXT}" "${TLS_DIR}/local-ca.srl"
+rm -f "${VAULT_CSR}" "${VAULT_EXT}" "${AUTHELIA_CSR}" "${AUTHELIA_EXT}" "${TLS_DIR}/local-ca.srl"
 
 echo "Internal TLS bootstrap complete:"
 echo "  CA cert: ${CA_CERT}"
 echo "  Vault cert: ${VAULT_CERT}"
 echo "  Vault key: ${VAULT_KEY}"
+echo "  Authelia cert: ${AUTHELIA_CERT}"
+echo "  Authelia key: ${AUTHELIA_KEY}"

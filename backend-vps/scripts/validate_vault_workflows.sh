@@ -38,6 +38,25 @@ is_placeholder_value() {
   return 1
 }
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+token_required() {
+  local key="$1"
+  local default_true="${2:-true}"
+  local raw
+  raw="$(env_value "${key}")"
+  if [[ -z "${raw}" ]]; then
+    is_true "${default_true}"
+    return
+  fi
+  is_true "${raw}"
+}
+
 vault_api_unauth() {
   local method="$1"
   local path="$2"
@@ -160,35 +179,65 @@ main() {
   fi
   log "AppRole token includes expected policy and TTL guardrail."
 
-  local required_pairs=(
-    "OPENAI_API_KEY:kv/data/study-agents/openai"
-    "SUPABASE_URL:kv/data/study-agents/supabase-url"
-    "SUPABASE_KEY:kv/data/study-agents/supabase-key"
-    "API_TOKEN:kv/data/study-agents/api-token"
-    "RAG_API_TOKEN:kv/data/study-agents/rag-api-token"
-    "COPILOT_API_KEY:kv/data/study-agents/copilot-api-key"
-    "SCENARIO_API_KEY:kv/data/study-agents/scenario-api-key"
-    "SCENARIO_SUPABASE_URL:kv/data/study-agents/scenario-supabase-url"
-    "SCENARIO_SUPABASE_KEY:kv/data/study-agents/scenario-supabase-key"
-  )
+  local openai_secret supabase_url_secret supabase_key_secret
+  local api_token_secret rag_token_secret copilot_token_secret
+  local scenario_api_secret scenario_url_secret scenario_key_secret
 
-  local pair env_key secret_path env_raw secret_value
-  for pair in "${required_pairs[@]}"; do
-    env_key="${pair%%:*}"
-    secret_path="${pair#*:}"
-    env_raw="$(env_value "${env_key}")"
+  vault_api_auth "${token}" GET "kv/data/study-agents/openai" || die "Vault read failed for kv/data/study-agents/openai"
+  assert_http_code "vault-read-OPENAI_API_KEY" "${VAULT_LAST_CODE}" "200"
+  openai_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+  [[ -n "${openai_secret}" ]] || die "Vault secret kv/data/study-agents/openai returned empty value"
 
-    # Only enforce existence for non-placeholder values that are expected to be in-use.
-    if is_placeholder_value "${env_raw}"; then
-      continue
-    fi
+  vault_api_auth "${token}" GET "kv/data/study-agents/supabase-url" || die "Vault read failed for kv/data/study-agents/supabase-url"
+  assert_http_code "vault-read-SUPABASE_URL" "${VAULT_LAST_CODE}" "200"
+  supabase_url_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+  [[ -n "${supabase_url_secret}" ]] || die "Vault secret kv/data/study-agents/supabase-url returned empty value"
 
-    vault_api_auth "${token}" GET "${secret_path}" || die "Vault read failed for ${secret_path}"
-    assert_http_code "vault-read-${env_key}" "${VAULT_LAST_CODE}" "200"
+  vault_api_auth "${token}" GET "kv/data/study-agents/supabase-key" || die "Vault read failed for kv/data/study-agents/supabase-key"
+  assert_http_code "vault-read-SUPABASE_KEY" "${VAULT_LAST_CODE}" "200"
+  supabase_key_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+  [[ -n "${supabase_key_secret}" ]] || die "Vault secret kv/data/study-agents/supabase-key returned empty value"
 
-    secret_value="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
-    [[ -n "${secret_value}" ]] || die "Vault secret ${secret_path} returned empty value"
-  done
+  vault_api_auth "${token}" GET "kv/data/study-agents/api-token" || die "Vault read failed for kv/data/study-agents/api-token"
+  assert_http_code "vault-read-API_TOKEN" "${VAULT_LAST_CODE}" "200"
+  api_token_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+
+  vault_api_auth "${token}" GET "kv/data/study-agents/rag-api-token" || die "Vault read failed for kv/data/study-agents/rag-api-token"
+  assert_http_code "vault-read-RAG_API_TOKEN" "${VAULT_LAST_CODE}" "200"
+  rag_token_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+
+  vault_api_auth "${token}" GET "kv/data/study-agents/copilot-api-key" || die "Vault read failed for kv/data/study-agents/copilot-api-key"
+  assert_http_code "vault-read-COPILOT_API_KEY" "${VAULT_LAST_CODE}" "200"
+  copilot_token_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+
+  if token_required API_REQUIRE_TOKEN true && [[ -z "${api_token_secret}" ]]; then
+    die "API_REQUIRE_TOKEN=true but kv/data/study-agents/api-token is empty."
+  fi
+  if token_required RAG_REQUIRE_TOKEN true && [[ -z "${rag_token_secret}" && -z "${api_token_secret}" ]]; then
+    die "RAG_REQUIRE_TOKEN=true but both kv/data/study-agents/rag-api-token and kv/data/study-agents/api-token are empty."
+  fi
+  if token_required COPILOT_REQUIRE_TOKEN true && [[ -z "${copilot_token_secret}" && -z "${api_token_secret}" ]]; then
+    die "COPILOT_REQUIRE_TOKEN=true but both kv/data/study-agents/copilot-api-key and kv/data/study-agents/api-token are empty."
+  fi
+
+  if ! is_placeholder_value "$(env_value SCENARIO_API_KEY)"; then
+    vault_api_auth "${token}" GET "kv/data/study-agents/scenario-api-key" || die "Vault read failed for kv/data/study-agents/scenario-api-key"
+    assert_http_code "vault-read-SCENARIO_API_KEY" "${VAULT_LAST_CODE}" "200"
+    scenario_api_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+    [[ -n "${scenario_api_secret}" ]] || die "Vault secret kv/data/study-agents/scenario-api-key returned empty value"
+  fi
+  if ! is_placeholder_value "$(env_value SCENARIO_SUPABASE_URL)"; then
+    vault_api_auth "${token}" GET "kv/data/study-agents/scenario-supabase-url" || die "Vault read failed for kv/data/study-agents/scenario-supabase-url"
+    assert_http_code "vault-read-SCENARIO_SUPABASE_URL" "${VAULT_LAST_CODE}" "200"
+    scenario_url_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+    [[ -n "${scenario_url_secret}" ]] || die "Vault secret kv/data/study-agents/scenario-supabase-url returned empty value"
+  fi
+  if ! is_placeholder_value "$(env_value SCENARIO_SUPABASE_KEY)"; then
+    vault_api_auth "${token}" GET "kv/data/study-agents/scenario-supabase-key" || die "Vault read failed for kv/data/study-agents/scenario-supabase-key"
+    assert_http_code "vault-read-SCENARIO_SUPABASE_KEY" "${VAULT_LAST_CODE}" "200"
+    scenario_key_secret="$(printf '%s' "${VAULT_LAST_BODY}" | jq -r '.data.data.value // empty')"
+    [[ -n "${scenario_key_secret}" ]] || die "Vault secret kv/data/study-agents/scenario-supabase-key returned empty value"
+  fi
 
   # Runtime policy guardrails: must not be able to read/write outside approved scope.
   vault_api_auth "${token}" GET "kv/data/not-study-agents/probe" || die "Vault forbidden-read probe request failed"

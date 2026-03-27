@@ -143,6 +143,29 @@ is_placeholder_value() {
   return 1
 }
 
+vault_approle_ready() {
+  local auth_method role_id_file secret_id_file
+  auth_method="$(get_env VAULT_AUTH_METHOD)"
+  [[ -n "${auth_method}" ]] || auth_method="token"
+  if [[ "${auth_method}" != "approle" ]]; then
+    return 1
+  fi
+
+  role_id_file="$(get_env VAULT_ROLE_ID_FILE)"
+  secret_id_file="$(get_env VAULT_SECRET_ID_FILE)"
+  [[ -n "${role_id_file}" ]] || role_id_file="/vault/bootstrap/role_id"
+  [[ -n "${secret_id_file}" ]] || secret_id_file="/vault/bootstrap/secret_id"
+
+  if [[ "${role_id_file}" == "/vault/bootstrap/role_id" ]]; then
+    role_id_file="${ROOT_DIR}/docker/vault/runtime/role_id"
+  fi
+  if [[ "${secret_id_file}" == "/vault/bootstrap/secret_id" ]]; then
+    secret_id_file="${ROOT_DIR}/docker/vault/runtime/secret_id"
+  fi
+
+  [[ -s "${role_id_file}" && -s "${secret_id_file}" ]]
+}
+
 ensure_env_file() {
   if [[ ! -f .env ]]; then
     cp .env.example .env
@@ -237,6 +260,9 @@ install_supabase_cli() {
 validate_core_env() {
   local key value missing=0
   ensure_env_file
+  if vault_approle_ready; then
+    return 0
+  fi
   for key in OPENAI_API_KEY SUPABASE_URL SUPABASE_KEY; do
     value="$(get_env "$key")"
     if is_placeholder_value "$value"; then
@@ -260,6 +286,10 @@ token_required() {
 }
 
 ensure_required_tokens() {
+  if vault_approle_ready; then
+    return 0
+  fi
+
   local need_generate=0
   local api_token rag_token copilot_key
   local api_required=0 rag_required=0 copilot_required=0

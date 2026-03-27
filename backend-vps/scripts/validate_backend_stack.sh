@@ -35,6 +35,35 @@ is_true() {
   esac
 }
 
+runtime_env_value() {
+  local key="$1"
+  local service value
+  for service in cag-service rag-service copilot-service; do
+    if ! dc ps --status running --services | grep -qx "${service}"; then
+      continue
+    fi
+    value="$(dc exec -T "${service}" /bin/sh -lc "grep -m1 '^${key}=' /env/.env.runtime 2>/dev/null | cut -d= -f2- || true" 2>/dev/null || true)"
+    if [[ -n "${value}" ]]; then
+      printf '%s' "${value}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_validation_secret() {
+  local key="$1"
+  local value
+  value="$(env_value "${key}")"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return 0
+  fi
+
+  value="$(runtime_env_value "${key}" || true)"
+  printf '%s' "${value}"
+}
+
 wait_for_required_services() {
   local attempt running service
   for ((attempt=1; attempt<=WAIT_RETRIES; attempt++)); do
@@ -176,25 +205,27 @@ main() {
   run_vault_workflow_validation
 
   local api_token rag_token copilot_key auth_header_cag=() auth_header_rag=() auth_header_copilot=()
-  api_token="$(env_value API_TOKEN)"
-  rag_token="$(env_value RAG_API_TOKEN)"
-  copilot_key="$(env_value COPILOT_API_KEY)"
+  if is_true "${VALIDATE_USE_AUTH_HEADERS:-false}"; then
+    api_token="$(resolve_validation_secret API_TOKEN)"
+    rag_token="$(resolve_validation_secret RAG_API_TOKEN)"
+    copilot_key="$(resolve_validation_secret COPILOT_API_KEY)"
 
-  if [[ -z "${rag_token}" ]]; then
-    rag_token="${api_token}"
-  fi
-  if [[ -z "${copilot_key}" ]]; then
-    copilot_key="${api_token}"
-  fi
+    if [[ -z "${rag_token}" ]]; then
+      rag_token="${api_token}"
+    fi
+    if [[ -z "${copilot_key}" ]]; then
+      copilot_key="${api_token}"
+    fi
 
-  if [[ -n "${api_token}" ]]; then
-    auth_header_cag=(-H "X-API-Key: ${api_token}")
-  fi
-  if [[ -n "${rag_token}" ]]; then
-    auth_header_rag=(-H "X-API-Key: ${rag_token}")
-  fi
-  if [[ -n "${copilot_key}" ]]; then
-    auth_header_copilot=(-H "X-API-Key: ${copilot_key}")
+    if [[ -n "${api_token}" ]]; then
+      auth_header_cag=(-H "X-API-Key: ${api_token}")
+    fi
+    if [[ -n "${rag_token}" ]]; then
+      auth_header_rag=(-H "X-API-Key: ${rag_token}")
+    fi
+    if [[ -n "${copilot_key}" ]]; then
+      auth_header_copilot=(-H "X-API-Key: ${copilot_key}")
+    fi
   fi
 
   log "Running HTTP smoke checks..."

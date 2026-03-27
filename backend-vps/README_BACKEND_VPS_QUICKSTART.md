@@ -71,6 +71,11 @@ If the local Supabase API port is HTTPS-only, the script now writes:
 sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_vault_nondev.sh'
 ```
 
+This now enforces Vault-first runtime by default:
+- synced runtime secrets are scrubbed from `.env`
+- pre-scrub backup is written under `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`
+- plaintext env fallback is disabled unless `ALLOW_PLAINTEXT_ENV_SECRETS=true`
+
 ## 7) Start backend
 
 ```bash

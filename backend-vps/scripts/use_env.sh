@@ -7,6 +7,13 @@ VAULT_TOKEN_CACHE="${ENV_DIR}/.vault_token.json"
 
 mkdir -p "${ENV_DIR}"
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 runtime_get() {
   local key="$1"
   [[ -f "${ENV_OUT}" ]] || return 0
@@ -209,6 +216,21 @@ EOF_TOKEN
   return 0
 }
 
+approle_material_ready() {
+  local role_id secret_id
+  role_id="${VAULT_ROLE_ID:-}"
+  secret_id="${VAULT_SECRET_ID:-}"
+
+  if [[ -z "${role_id}" && -n "${VAULT_ROLE_ID_FILE:-}" && -r "${VAULT_ROLE_ID_FILE}" ]]; then
+    role_id="$(head -n1 "${VAULT_ROLE_ID_FILE}" | tr -d '\r\n')"
+  fi
+  if [[ -z "${secret_id}" && -n "${VAULT_SECRET_ID_FILE:-}" && -r "${VAULT_SECRET_ID_FILE}" ]]; then
+    secret_id="$(head -n1 "${VAULT_SECRET_ID_FILE}" | tr -d '\r\n')"
+  fi
+
+  [[ -n "${role_id}" && -n "${secret_id}" ]]
+}
+
 fetch_secret_value() {
   local path="$1"
   local response value
@@ -225,6 +247,26 @@ fetch_secret_value() {
 
   printf '%s' "${value}"
 }
+
+auth_method="${VAULT_AUTH_METHOD:-token}"
+vault_first_mode=0
+if [[ "${auth_method}" == "approle" ]] && approle_material_ready && ! is_true "${ALLOW_PLAINTEXT_ENV_SECRETS:-false}"; then
+  vault_first_mode=1
+fi
+
+plain_OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+plain_SUPABASE_URL="${SUPABASE_URL:-}"
+plain_SUPABASE_KEY="${SUPABASE_KEY:-}"
+plain_API_TOKEN="${API_TOKEN:-}"
+plain_COPILOT_API_KEY="${COPILOT_API_KEY:-}"
+plain_RAG_API_TOKEN="${RAG_API_TOKEN:-}"
+plain_SCENARIO_API_KEY="${SCENARIO_API_KEY:-}"
+plain_SCENARIO_SUPABASE_URL="${SCENARIO_SUPABASE_URL:-}"
+plain_SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-}"
+
+if (( vault_first_mode == 1 )); then
+  unset OPENAI_API_KEY SUPABASE_URL SUPABASE_KEY API_TOKEN COPILOT_API_KEY RAG_API_TOKEN SCENARIO_API_KEY SCENARIO_SUPABASE_URL SCENARIO_SUPABASE_KEY || true
+fi
 
 # Seed from previous successful runtime fetch to keep services available if Vault is transiently unavailable.
 OPENAI_API_KEY="${OPENAI_API_KEY:-$(runtime_get OPENAI_API_KEY)}"
@@ -248,6 +290,19 @@ RAG_API_TOKEN="${RAG_API_TOKEN:-$(fetch_secret_value kv/data/study-agents/rag-ap
 SCENARIO_API_KEY="${SCENARIO_API_KEY:-$(fetch_secret_value kv/data/study-agents/scenario-api-key)}"
 SCENARIO_SUPABASE_URL="${SCENARIO_SUPABASE_URL:-$(fetch_secret_value kv/data/study-agents/scenario-supabase-url)}"
 SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-$(fetch_secret_value kv/data/study-agents/scenario-supabase-key)}"
+
+# Compatibility mode: when AppRole is not bootstrapped, allow plaintext env fallback.
+if (( vault_first_mode == 0 )); then
+  OPENAI_API_KEY="${OPENAI_API_KEY:-${plain_OPENAI_API_KEY}}"
+  SUPABASE_URL="${SUPABASE_URL:-${plain_SUPABASE_URL}}"
+  SUPABASE_KEY="${SUPABASE_KEY:-${plain_SUPABASE_KEY}}"
+  API_TOKEN="${API_TOKEN:-${plain_API_TOKEN}}"
+  COPILOT_API_KEY="${COPILOT_API_KEY:-${plain_COPILOT_API_KEY}}"
+  RAG_API_TOKEN="${RAG_API_TOKEN:-${plain_RAG_API_TOKEN}}"
+  SCENARIO_API_KEY="${SCENARIO_API_KEY:-${plain_SCENARIO_API_KEY}}"
+  SCENARIO_SUPABASE_URL="${SCENARIO_SUPABASE_URL:-${plain_SCENARIO_SUPABASE_URL}}"
+  SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-${plain_SCENARIO_SUPABASE_KEY}}"
+fi
 
 umask 077
 cat > "${ENV_OUT}" <<EOF_ENV

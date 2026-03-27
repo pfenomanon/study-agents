@@ -384,9 +384,6 @@ session:
   redis:
     host: redis
     port: 6379
-    tls:
-      server_name: redis
-      skip_verify: false
 
 regulation:
   max_retries: 3

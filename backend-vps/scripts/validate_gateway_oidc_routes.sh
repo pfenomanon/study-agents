@@ -37,22 +37,30 @@ check_http_code() {
     curl_args=(-k)
   fi
 
-  if ! curl -sS -m "${GATEWAY_ROUTE_TIMEOUT:-20}" -o "${body_file}" -w '%{http_code}' "${curl_args[@]}" "${url}" > "${status_file}"; then
-    die "${name}: request failed for ${url}"
-  fi
+  local retries interval attempt
+  retries="${GATEWAY_ROUTE_RETRIES:-30}"
+  interval="${GATEWAY_ROUTE_RETRY_INTERVAL:-2}"
 
-  code="$(cat "${status_file}")"
-  IFS=',' read -r -a expected_codes <<< "${expected_csv}"
-  for expected in "${expected_codes[@]}"; do
-    if [[ "${code}" == "${expected}" ]]; then
-      if [[ -n "${body_pattern}" ]] && ! rg -q --fixed-strings "${body_pattern}" "${body_file}"; then
-        echo "--- ${name} body ---" >&2
-        sed -n '1,80p' "${body_file}" >&2 || true
-        die "${name}: response body missing expected text: ${body_pattern}"
-      fi
-      log "${name}: HTTP ${code} (acceptable)"
-      return 0
+  for attempt in $(seq 1 "${retries}"); do
+    if ! curl -sS -m "${GATEWAY_ROUTE_TIMEOUT:-20}" -o "${body_file}" -w '%{http_code}' "${curl_args[@]}" "${url}" > "${status_file}"; then
+      sleep "${interval}"
+      continue
     fi
+
+    code="$(cat "${status_file}")"
+    IFS=',' read -r -a expected_codes <<< "${expected_csv}"
+    for expected in "${expected_codes[@]}"; do
+      if [[ "${code}" == "${expected}" ]]; then
+        if [[ -n "${body_pattern}" ]] && ! rg -q --fixed-strings "${body_pattern}" "${body_file}"; then
+          sleep "${interval}"
+          continue 2
+        fi
+        log "${name}: HTTP ${code} (acceptable)"
+        return 0
+      fi
+    done
+
+    sleep "${interval}"
   done
 
   echo "--- ${name} body ---" >&2

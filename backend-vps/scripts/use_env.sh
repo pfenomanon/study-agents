@@ -13,53 +13,52 @@ fetch_secret() {
   if [ -z "${VAULT_TOKEN:-}" ] || [ -z "${VAULT_ADDR:-}" ]; then
     return 0
   fi
-  resp="$(curl -sSf -H "X-Vault-Token: ${VAULT_TOKEN}" "${VAULT_ADDR}/v1/${path}" || true)"
-  if [ -z "$resp" ]; then
-    return 0
-  fi
-  python - <<'PY' 2>/dev/null || true
-import json, os, sys
-data = json.loads(os.environ["RESP"])
-print(data.get("data", {}).get("data", {}).get(os.environ["KEY"], ""))
+  PATH_ARG="${path}" KEY_ARG="${key}" python - <<'PY' 2>/dev/null || true
+import json
+import os
+import ssl
+import urllib.request
+
+addr = os.environ.get("VAULT_ADDR", "").strip().rstrip("/")
+token = os.environ.get("VAULT_TOKEN", "").strip()
+path = os.environ.get("PATH_ARG", "").strip()
+key = os.environ.get("KEY_ARG", "").strip()
+
+if not addr or not token or not path or not key:
+    raise SystemExit(0)
+
+url = f"{addr}/v1/{path}"
+context = None
+
+if url.startswith("https://"):
+    skip_verify = os.environ.get("VAULT_SKIP_VERIFY", "").strip().lower() in {"1", "true", "yes"}
+    if skip_verify:
+        context = ssl._create_unverified_context()
+    else:
+        cacert = os.environ.get("VAULT_CACERT", "").strip() or None
+        capath = os.environ.get("VAULT_CAPATH", "").strip() or None
+        context = ssl.create_default_context(cafile=cacert, capath=capath)
+
+request = urllib.request.Request(url, headers={"X-Vault-Token": token})
+
+try:
+    with urllib.request.urlopen(request, context=context, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+except Exception:
+    raise SystemExit(0)
+
+print(payload.get("data", {}).get("data", {}).get(key, ""), end="")
 PY
 }
 
 # Preserve existing env if already set.
-OPENAI_API_KEY=${OPENAI_API_KEY:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/openai" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
-SUPABASE_URL=${SUPABASE_URL:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/supabase-url" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
-SUPABASE_KEY=${SUPABASE_KEY:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/supabase-key" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
-API_TOKEN=${API_TOKEN:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/api-token" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
-COPILOT_API_KEY=${COPILOT_API_KEY:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/copilot-api-key" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
-RAG_API_TOKEN=${RAG_API_TOKEN:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/rag-api-token" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
-SCENARIO_API_KEY=${SCENARIO_API_KEY:-$(RESP="$(VAULT_TOKEN=${VAULT_TOKEN:-} VAULT_ADDR=${VAULT_ADDR:-} fetch_secret "kv/data/study-agents/scenario-api-key" "value")" KEY=value python - <<'PY' 2>/dev/null || true
-import os
-print(os.environ.get("RESP",""))
-PY
-)}
+OPENAI_API_KEY=${OPENAI_API_KEY:-$(fetch_secret "kv/data/study-agents/openai" "value")}
+SUPABASE_URL=${SUPABASE_URL:-$(fetch_secret "kv/data/study-agents/supabase-url" "value")}
+SUPABASE_KEY=${SUPABASE_KEY:-$(fetch_secret "kv/data/study-agents/supabase-key" "value")}
+API_TOKEN=${API_TOKEN:-$(fetch_secret "kv/data/study-agents/api-token" "value")}
+COPILOT_API_KEY=${COPILOT_API_KEY:-$(fetch_secret "kv/data/study-agents/copilot-api-key" "value")}
+RAG_API_TOKEN=${RAG_API_TOKEN:-$(fetch_secret "kv/data/study-agents/rag-api-token" "value")}
+SCENARIO_API_KEY=${SCENARIO_API_KEY:-$(fetch_secret "kv/data/study-agents/scenario-api-key" "value")}
 
 cat >"$ENV_OUT" <<EOF
 OPENAI_API_KEY=${OPENAI_API_KEY}

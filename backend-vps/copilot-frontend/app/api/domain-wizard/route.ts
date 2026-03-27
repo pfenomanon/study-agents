@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const BASE =
-  process.env.COPILOT_BACKEND_URL?.replace(/\/copilot\/chat$/, "") || "http://copilot-service:9010";
+  process.env.COPILOT_BACKEND_URL?.replace(/\/copilot\/chat$/, "") || "https://copilot-service:9010";
 const COPILOT_API_KEY = (process.env.COPILOT_API_KEY || process.env.API_TOKEN || "").trim();
 
 async function fetchWithRetry(url: string, init: RequestInit, retries = 2) {

@@ -1,132 +1,209 @@
-# Backend VPS Quickstart
+# Backend-VPS Quickstart (Local Supabase + HTTPS Gateway)
 
-Use this package on a new Debian/Ubuntu VPS.
+## Fast path (scripted)
 
-## 1) Extract on VPS
-
-```bash
-tar -xzf study-agents-backend-vps-<timestamp>.tar.gz
-cd study-agents-backend-vps-<timestamp>
-```
-
-## 2) Install host dependencies
-
-```bash
-bash scripts/install_backend_vps.sh deps
-```
-
-This installs Docker Engine, Docker Compose plugin, and helper packages (`curl`, `jq`, `python3`, `python3-venv`, `postgresql-client`, `git`, `openssl`, `unzip`).
-
-Runtime versions used by the services:
-- Python service containers: `python:3.11-slim` (pinned in `docker/python.Dockerfile`)
-- Copilot frontend container: `node:20-alpine` (pinned in `docker/copilot-frontend.Dockerfile`)
-
-## 3) Configure `.env`
-
-```bash
-cp -n .env.example .env
-nano .env
-```
-
-Required values:
-- `OPENAI_API_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_KEY` (service-role key recommended)
-
-Token defaults (important):
-- `API_REQUIRE_TOKEN=true`
-- `RAG_REQUIRE_TOKEN=true`
-- `COPILOT_REQUIRE_TOKEN=true`
-
-If required tokens are empty, the installer auto-generates and writes:
-- `API_TOKEN`
-- `RAG_API_TOKEN`
-- `COPILOT_API_KEY`
-- `SCENARIO_API_KEY`
-
-Optional manual token generation:
-
-```bash
-bash scripts/generate_local_api_keys.sh --write-env
-```
-
-## 4) Apply Supabase schema
-
-Cloud Supabase (recommended):
-- Open Supabase SQL Editor for your project.
-- Run `supabase_schema.sql`.
-
-CLI path (optional):
-- Set `SUPABASE_DB_URL` in `.env` (Postgres DSN), then run:
-
-```bash
-bash scripts/install_backend_vps.sh apply-schema
-```
-
-## 5) Start backend services
-
-Recommended (build + start + health validation):
-```bash
-bash scripts/install_backend_vps.sh deploy
-```
-
-Equivalent manual start (without the full deploy wrapper):
-```bash
-bash scripts/install_backend_vps.sh start
-```
-
-## 6) Verify and monitor
-
-```bash
-bash scripts/install_backend_vps.sh status
-bash scripts/install_backend_vps.sh logs
-bash scripts/install_backend_vps.sh validate
-```
-
-## 7) Dummy-proof copy/paste flow (fresh host)
-
-Run these exactly, in order:
-
-```bash
-# 0) enter project directory
-cd /path/to/study-agents/backend-vps
-
-# 1) install host dependencies + scaffold .env if missing
-bash scripts/install_backend_vps.sh deps
-
-# 2) open .env and fill required values (must not be placeholders)
-nano .env
-
-# 3) deploy and run smoke checks
-bash scripts/install_backend_vps.sh deploy
-
-# 4) confirm services are up
-bash scripts/install_backend_vps.sh status
-```
-
-Success criteria after step 3:
-- No `ERROR:` lines from the installer.
-- `deploy` ends with `Validation complete: backend services are reachable.`
-- `status` shows `cag-service`, `rag-service`, `copilot-service`, `copilot-frontend`, `redis`, `authelia`, `tls-gateway` as running.
-
-Default local ports (localhost-bound):
-- `127.0.0.1:8000` (`/cag-answer`, `/cag-ocr-answer`)
-- `127.0.0.1:8100` (`/build`)
-- `127.0.0.1:9010` (`/copilot/*`)
-- `127.0.0.1:3000` (Copilot UI)
-
-## Optional: local Supabase all-in-one mode
-
-This mode starts local Supabase, applies `supabase_schema.sql`, then starts backend services:
+From `backend-vps/`:
 
 ```bash
 bash scripts/install_backend_vps.sh start-local-all
 ```
 
-## Optional: ZimaBoard 2 / x86_64 16GB tuned path
+This performs dependency install, internal TLS bootstrap, local Supabase setup, schema apply, backend start, and validation.
+If Docker group membership is not active in the current shell yet, the installer now auto-falls back to `sg docker` for Docker-dependent helper steps.
+
+## 1) Install dependencies
 
 ```bash
-bash scripts/install_zimaboard_16gb.sh start
+sudo apt-get update -y
+sudo apt-get install -y \
+  docker.io docker-compose-v2 \
+  curl jq ca-certificates python3 python3-venv \
+  postgresql-client git openssl unzip
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
 ```
 
-See `ZIMABOARD_16GB_DEPLOYMENT.md` for full preflight, tuning, and operations guidance.
+Open a new shell.
+
+## 2) Get project
+
+```bash
+git clone git@github.com:pfenomanon/study-agents.git
+cd study-agents/backend-vps
+```
+
+## 3) Prepare `.env`
+
+```bash
+cp -n .env.example .env
+sed -i 's|^PUBLIC_DOMAIN=.*|PUBLIC_DOMAIN=127.0.0.1|' .env
+sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=you@example.com|' .env
+sed -i 's|^OPENAI_API_KEY=.*|OPENAI_API_KEY=sk-REPLACE_ME|' .env
+sed -i 's|^COPILOT_SERVICE_WORKERS=.*|COPILOT_SERVICE_WORKERS=1|' .env
+```
+
+Replace:
+- `OPENAI_API_KEY`
+- `ACME_EMAIL`
+
+## 4) Generate internal TLS assets, API tokens, and auth config
+
+```bash
+bash scripts/bootstrap_internal_tls.sh
+bash scripts/generate_local_api_keys.sh --write-env --overwrite
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_authelia.sh'
+```
+
+## 5) Setup local Supabase and schema
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && PATH=$HOME/.local/bin:$PATH bash scripts/setup_local_supabase.sh'
+psql "$(awk -F= '/^SUPABASE_DB_URL=/{print $2}' .env)" -v ON_ERROR_STOP=1 -f supabase_schema.sql
+```
+
+## 6) Start backend
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --build'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --force-recreate cag-service rag-service copilot-service copilot-frontend tls-gateway authelia redis vault'
+```
+
+## 7) Validate
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/validate_zimaboard_stack.sh'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/validate_backend_stack.sh'
+```
+
+## 8) Enable LAN HTTPS on gateway (for other devices)
+
+Use the Zima LAN IP or DNS name as the domain value.
+
+```bash
+bash scripts/configure_lan_https.sh 10.72.72.161 10.72.72.0/24
+```
+
+Equivalent wrapper action:
+
+```bash
+bash scripts/install_backend_vps.sh configure-lan-https 10.72.72.161 10.72.72.0/24
+```
+
+Open:
+- `https://10.72.72.161/`
+
+Note: this is gateway HTTPS. Do not use `https://<ip>:3000`.
+
+## 9) Trust the local gateway CA cert on client devices
+
+Export certs from server:
+
+```bash
+bash scripts/export_caddy_root_ca.sh
+```
+
+Equivalent wrapper action:
+
+```bash
+bash scripts/install_backend_vps.sh export-caddy-ca
+```
+
+This exports:
+- `/home/user1/caddy-local-root.crt`
+- `/home/user1/caddy-local-intermediate.crt`
+- `/home/user1/caddy-local-chain.crt`
+
+Windows client import (PowerShell, run on the client as Administrator):
+
+```powershell
+scp user1@10.72.72.161:/home/user1/caddy-local-root.crt $env:USERPROFILE\Downloads\
+scp user1@10.72.72.161:/home/user1/caddy-local-intermediate.crt $env:USERPROFILE\Downloads\
+
+$stores = @(
+  'Cert:\CurrentUser\Root', 'Cert:\CurrentUser\CA',
+  'Cert:\LocalMachine\Root', 'Cert:\LocalMachine\CA'
+)
+foreach ($store in $stores) {
+  Get-ChildItem $store | Where-Object { $_.Subject -like '*Caddy Local Authority*' } | Remove-Item -Force
+}
+
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation 'Cert:\CurrentUser\Root'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-intermediate.crt" -CertStoreLocation 'Cert:\CurrentUser\CA'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation 'Cert:\LocalMachine\Root'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-intermediate.crt" -CertStoreLocation 'Cert:\LocalMachine\CA'
+```
+
+After import, restart browser and open `https://10.72.72.161/`.
+Any time `caddy-data` is recreated (or Caddy local CA rotates), repeat this trust step on every client.
+
+## 10) E2E encryption checks (quick)
+
+```bash
+cd /home/user1/study-agents/backend-vps
+CA=docker/internal-tls/internal-ca.crt
+VAULT_CA=docker/internal-tls/vault-ca.pem
+
+# Internal service TLS
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8000/cag-answer -H 'content-type: application/json' --data '{"question":"health check"}'
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8100/build -H 'content-type: application/json' --data '{}'
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:9010/copilot/chat -H 'content-type: application/json' --data '{}'
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:3000/
+
+# Vault TLS (host) and plaintext rejection
+curl --cacert "$VAULT_CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8200/v1/sys/health
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8200/v1/sys/health
+
+# Gateway chain/trust (uses exported Caddy root)
+GATEWAY_CA=/home/user1/caddy-local-root.crt
+curl --cacert "$GATEWAY_CA" --resolve 10.72.72.161:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}\n' https://10.72.72.161/healthz
+```
+
+Expected:
+- service checks return acceptable app statuses (for example `200/400/401/403/422`)
+- Vault HTTPS returns `200` (or another valid health code like `429/472/473/501/503`)
+- Vault plaintext HTTP returns `400`
+
+Security posture:
+- Expose only gateway `443` to remote clients.
+- Keep direct service ports (`3000`, `8000`, `8100`, `9010`, `8200`) bound to loopback/private only.
+
+## 11) Operations
+
+```bash
+# status
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml ps'
+
+# logs
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml logs -f cag-service rag-service copilot-service tls-gateway'
+
+# stop
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml down'
+```
+
+## 12) Authelia one-time code during 2FA setup
+
+This deployment currently uses Authelia filesystem notifier (not SMTP email), so the one-time code is written to a file in the Authelia container.
+
+If the browser shows Identity Verification and no email arrives:
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml exec -T authelia sh -lc "grep -E \"^[A-Z0-9]{8}$\" /config/notification.txt | tail -n 1"'
+```
+
+Important:
+- Do not close/cancel the browser identity verification dialog before entering the code; closing invalidates that code.
+- If the code expired, trigger a new code in the UI and run the command again.
+
+## 13) If build fails with `No space left on device`
+
+Run:
+
+```bash
+bash scripts/install_backend_vps.sh reclaim-disk
+```
+
+Then retry:
+
+```bash
+bash scripts/install_backend_vps.sh restart
+```

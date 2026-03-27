@@ -65,6 +65,31 @@ python scripts/build_release_bundles.py
        bash scripts/install_backend_vps.sh apply-schema
        ```
 
+## E2E Encryption Requirements (Compose Path)
+
+For full hop-by-hop encryption (client -> gateway -> service -> data dependencies):
+
+1. Bootstrap internal TLS assets:
+   ```bash
+   bash scripts/bootstrap_internal_tls.sh
+   ```
+2. Bootstrap auth/gateway config (this also ensures TLS-backed Authelia config):
+   ```bash
+   bash scripts/bootstrap_authelia.sh
+   ```
+3. Keep these set in `.env`:
+   - `PUBLIC_DOMAIN`, `ACME_EMAIL`
+   - `VAULT_ADDR_INTERNAL=https://vault:8200`
+   - `VAULT_CACERT_INTERNAL=/tls/vault-ca.pem`
+4. Do not expose direct service ports externally (`3000`, `8000`, `8100`, `9010`, `8200`). Expose only `443`.
+5. Export and trust the local gateway CA on client devices when using local/internal PKI:
+   ```bash
+   bash scripts/export_caddy_root_ca.sh
+   ```
+   - Export now includes root + intermediate + chain files.
+   - On Windows clients, remove old `Caddy Local Authority` certs from `Root`/`CA` stores before importing the current root+intermediate.
+   - If `caddy-data` is recreated (new host, volume cleanup, compose project rename), repeat client trust import on every device.
+
 ## Run with Docker Compose (recommended)
 Recommended orchestrated deploy (installs host deps, validates `.env`, starts stack, and runs smoke checks):
 ```bash
@@ -83,14 +108,15 @@ bash scripts/install_zimaboard_16gb.sh start
 This applies swap/sysctl host tuning, uses `docker-compose.zimaboard.yml`, and runs post-start validation.
 
 Services:
-- `cag-service` (port 8000): `/cag-answer`, `/cag-ocr-answer`
-- `rag-service` (port 8100): RAG builder API
+- `cag-service` (port 8000, TLS listener): `/cag-answer`, `/cag-ocr-answer`
+- `rag-service` (port 8100, TLS listener): RAG builder API
 - `utility-service`: base image for running CLI agents inside the container
-- `copilot-service` (port 9010): PydanticAI backend for CopilotKit
-- `copilot-frontend` (port 3000): Next.js + CopilotKit UI (set `NEXT_PUBLIC_COPILOT_API`/`COPILOT_BACKEND_URL` if custom)
+- `copilot-service` (port 9010, TLS listener): PydanticAI backend for CopilotKit
+- `copilot-frontend` (port 3000, TLS endpoint): Next.js + CopilotKit UI (set `NEXT_PUBLIC_COPILOT_API`/`COPILOT_BACKEND_URL` if custom)
 - `redis`: session + login-regulation state for gateway auth
 - `authelia`: authentication portal/MFA and forward-auth backend
 - `tls-gateway` (port 443): machine-terminated HTTPS endpoint for remote clients
+- `vault` (port 8200 localhost bind, TLS): optional secret source for runtime env injection
 - Vision capture: UI card and `/copilot/capture` endpoint are available; they need a display. For headless use, post images to `/cag-ocr-answer` or run capture on a GUI host.
 
 Build model:
@@ -156,6 +182,11 @@ After configuration, run:
 ```bash
 study-agents-validate --print-summary
 ```
+Then run stack TLS validation:
+```bash
+bash scripts/validate_backend_stack.sh
+```
+Validation now also verifies the gateway certificate chain (leaf + intermediate) and checks `/healthz` using the exported Caddy root trust.
 Then smoke-test:
 ```bash
 curl -X POST https://<domain>/cag-answer \

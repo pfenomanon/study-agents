@@ -15,8 +15,15 @@ services:
     env_file: .env
     environment:
       HOME: /app
+      TLS_CERT_FILE: /tls/cag-service.crt
+      TLS_KEY_FILE: /tls/cag-service.key
+      SSL_CERT_FILE: /tls/ca-bundle.crt
+      VAULT_ADDR: ${VAULT_ADDR_INTERNAL:-https://vault:8200}
+      VAULT_CACERT: ${VAULT_CACERT_INTERNAL:-/tls/vault-ca.pem}
     ports:
       - "127.0.0.1:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
     restart: unless-stopped
@@ -27,6 +34,8 @@ services:
       - ./prompts:/app/prompts
       - ./data:/app/data
       - ./knowledge_graph:/app/knowledge_graph
+      - ./scripts/use_env.sh:/app/use_env.sh:ro
+      - ./docker/internal-tls:/tls:ro
       - env-vol:/env
 
   rag-service:
@@ -35,15 +44,24 @@ services:
     environment:
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
+      TLS_CERT_FILE: /tls/rag-service.crt
+      TLS_KEY_FILE: /tls/rag-service.key
+      SSL_CERT_FILE: /tls/ca-bundle.crt
+      VAULT_ADDR: ${VAULT_ADDR_INTERNAL:-https://vault:8200}
+      VAULT_CACERT: ${VAULT_CACERT_INTERNAL:-/tls/vault-ca.pem}
     depends_on:
       - cag-service
     volumes:
       - ./src:/app/src
       - ./prompts:/app/prompts
       - ./data:/app/data
+      - ./scripts/use_env.sh:/app/use_env.sh:ro
+      - ./docker/internal-tls:/tls:ro
       - env-vol:/env
     ports:
       - "127.0.0.1:8100:8100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
     restart: unless-stopped
@@ -56,14 +74,21 @@ services:
     environment:
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
+      SSL_CERT_FILE: /tls/ca-bundle.crt
+      VAULT_ADDR: ${VAULT_ADDR_INTERNAL:-https://vault:8200}
+      VAULT_CACERT: ${VAULT_CACERT_INTERNAL:-/tls/vault-ca.pem}
     depends_on:
       - cag-service
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data
       - ./research_output:/app/research_output
+      - ./scripts/use_env.sh:/app/use_env.sh:ro
+      - ./docker/internal-tls:/tls:ro
       - env-vol:/env
     entrypoint: ["/bin/sh", "-c", "/app/use_env.sh tail -f /dev/null"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
     restart: unless-stopped
@@ -77,6 +102,11 @@ services:
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
       COPILOT_RESEARCH_OUTPUT_DIR: /app/data/output/research
+      TLS_CERT_FILE: /tls/copilot-service.crt
+      TLS_KEY_FILE: /tls/copilot-service.key
+      SSL_CERT_FILE: /tls/ca-bundle.crt
+      VAULT_ADDR: ${VAULT_ADDR_INTERNAL:-https://vault:8200}
+      VAULT_CACERT: ${VAULT_CACERT_INTERNAL:-/tls/vault-ca.pem}
     depends_on:
       - cag-service
     volumes:
@@ -84,12 +114,16 @@ services:
       - ./prompts:/app/prompts
       - ./research_output:/app/research_output
       - ./data:/app/data
+      - ./scripts/use_env.sh:/app/use_env.sh:ro
+      - ./docker/internal-tls:/tls:ro
       - env-vol:/env
     ports:
       - "127.0.0.1:9010:9010"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
-    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh uvicorn study_agents.copilot_service:app --host 0.0.0.0 --port 9010 --workers ${COPILOT_SERVICE_WORKERS:-2}"]
+    entrypoint: ["/bin/sh", "-c", "/app/use_env.sh python -m study_agents.copilot_service"]
     restart: unless-stopped
     logging: *default-logging
 
@@ -102,16 +136,18 @@ services:
     env_file: .env
     environment:
       NEXT_PUBLIC_COPILOT_API: /api/copilot
-      COPILOT_BACKEND_URL: http://copilot-service:9010/copilot/chat
+      COPILOT_BACKEND_URL: https://copilot-service:9010/copilot/chat
       COPILOT_API_KEY: ${COPILOT_API_KEY:-}
       RESEARCH_ROOT: /app/data/output/research
+      NODE_EXTRA_CA_CERTS: /tls/internal-ca.crt
     depends_on:
       - copilot-service
     volumes:
       - ./data:/app/data
       - ./research_output:/app/research_output
+      - ./docker/internal-tls:/tls:ro
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3000:3443"
     networks:
       - backend
     restart: unless-stopped
@@ -119,7 +155,27 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+      - --port
+      - "0"
+      - --tls-port
+      - "6379"
+      - --tls-cert-file
+      - /tls/redis.crt
+      - --tls-key-file
+      - /tls/redis.key
+      - --tls-ca-cert-file
+      - /tls/internal-ca.crt
+      - --tls-auth-clients
+      - "no"
+    volumes:
+      - ./docker/internal-tls:/tls:ro
     networks:
       - backend
     restart: unless-stopped
@@ -131,6 +187,7 @@ services:
       - redis
     volumes:
       - ./docker/authelia:/config
+      - ./docker/internal-tls:/tls:ro
     networks:
       - backend
     restart: unless-stopped
@@ -150,6 +207,7 @@ services:
       - "443:443/udp"
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./docker/internal-tls:/tls:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:
@@ -159,16 +217,26 @@ services:
 
   vault:
     image: hashicorp/vault:1.16.2
+    entrypoint: ["vault"]
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:-root}
-      VAULT_ADDR: http://0.0.0.0:8200
+      VAULT_ADDR: https://0.0.0.0:8200
     ports:
       - "127.0.0.1:8200:8200"
+    volumes:
+      - ./docker/internal-tls:/tls
     networks:
       - backend
     cap_add:
       - IPC_LOCK
-    command: "server -dev"
+    command:
+      - server
+      - -dev
+      - -dev-listen-address=0.0.0.0:8200
+      - -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN_ID:-root}
+      - -dev-tls
+      - -dev-tls-cert-dir=/tls
+      - -dev-tls-san=vault
     logging: *default-logging
 
 volumes:

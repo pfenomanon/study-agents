@@ -1,11 +1,19 @@
 {
-    email {$ACME_EMAIL}
+    email {$ACME_EMAIL:admin@localhost}
     admin off
+    default_sni {$PUBLIC_DOMAIN:localhost}
+    servers {
+        protocols h1
+    }
 }
 
 # Machine-terminated TLS gateway.
 # Set PUBLIC_DOMAIN in .env to the DNS name pointing to this host.
 {$PUBLIC_DOMAIN:localhost} {
+    tls internal {
+        key_type rsa2048
+    }
+
     encode gzip zstd
 
     header {
@@ -22,27 +30,51 @@
         # so allow them regardless of source IP allowlist.
         @capture_session path /capture-session*
         handle @capture_session {
-            reverse_proxy cag-service:8000
+            reverse_proxy https://cag-service:8000 {
+                transport http {
+                    tls
+                    tls_server_name cag-service
+                    tls_trust_pool file /tls/internal-ca.crt
+                }
+            }
         }
 
         @allowlisted remote_ip {$GATEWAY_ALLOWED_CIDRS:127.0.0.1/32 ::1/128}
         handle @allowlisted {
             @authelia path /authelia*
             handle @authelia {
-                reverse_proxy authelia:9091
+                reverse_proxy https://authelia:9091 {
+                    transport http {
+                        tls
+                        tls_server_name authelia
+                        tls_trust_pool file /tls/internal-ca.crt
+                    }
+                }
             }
 
             # OIDC endpoints must be reachable without an existing app session.
             @authelia_oidc path /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/*
             handle @authelia_oidc {
-                reverse_proxy authelia:9091
+                reverse_proxy https://authelia:9091 {
+                    transport http {
+                        tls
+                        tls_server_name authelia
+                        tls_trust_pool file /tls/internal-ca.crt
+                    }
+                }
             }
 
             # CAG API endpoints are protected via API_TOKEN at the application layer.
             # Bypass interactive Authelia redirects so CLI clients receive JSON responses.
             @cag path /cag-answer /cag-ocr-answer /capture-session*
             handle @cag {
-                reverse_proxy cag-service:8000
+                reverse_proxy https://cag-service:8000 {
+                    transport http {
+                        tls
+                        tls_server_name cag-service
+                        tls_trust_pool file /tls/internal-ca.crt
+                    }
+                }
             }
 
             # Authelia enforces MFA and login regulation.
@@ -50,23 +82,46 @@
             @protected {
                 not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /cag-answer /cag-ocr-answer /capture-session*
             }
-            forward_auth @protected authelia:9091 {
+            forward_auth @protected https://authelia:9091 {
                 uri /api/authz/forward-auth
                 copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+                transport http {
+                    tls
+                    tls_server_name authelia
+                    tls_trust_pool file /tls/internal-ca.crt
+                }
             }
 
             @rag path /build
             handle @rag {
-                reverse_proxy rag-service:8100
+                reverse_proxy https://rag-service:8100 {
+                    transport http {
+                        tls
+                        tls_server_name rag-service
+                        tls_trust_pool file /tls/internal-ca.crt
+                    }
+                }
             }
 
             @copilot_api path /copilot/*
             handle @copilot_api {
-                reverse_proxy copilot-service:9010
+                reverse_proxy https://copilot-service:9010 {
+                    transport http {
+                        tls
+                        tls_server_name copilot-service
+                        tls_trust_pool file /tls/internal-ca.crt
+                    }
+                }
             }
 
             handle {
-                reverse_proxy copilot-frontend:3000
+                reverse_proxy https://copilot-frontend:3443 {
+                    transport http {
+                        tls
+                        tls_server_name copilot-frontend
+                        tls_trust_pool file /tls/internal-ca.crt
+                    }
+                }
             }
         }
 

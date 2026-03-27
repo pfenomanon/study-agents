@@ -1789,11 +1789,11 @@ export default function Home() {
             </div>
             <label>
               Remote CAG URL
-              <input value={remoteCagUrl} onChange={(e) => setRemoteCagUrl(e.target.value)} placeholder="http://cag-service:8000/cag-answer" />
+              <input value={remoteCagUrl} onChange={(e) => setRemoteCagUrl(e.target.value)} placeholder="https://cag-service:8000/cag-answer" />
             </label>
             <label>
               Remote Image URL
-              <input value={remoteImageUrl} onChange={(e) => setRemoteImageUrl(e.target.value)} placeholder="http://cag-service:8000/cag-ocr-answer" />
+              <input value={remoteImageUrl} onChange={(e) => setRemoteImageUrl(e.target.value)} placeholder="https://cag-service:8000/cag-ocr-answer" />
             </label>
             <label>
               Platform

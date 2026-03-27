@@ -15,6 +15,8 @@ fi
 
 mkdir -p "${AUTHELIA_DIR}"
 
+bash "${ROOT_DIR}/scripts/bootstrap_internal_tls.sh"
+
 get_env() {
   local key="$1"
   awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_FILE}"
@@ -191,9 +193,13 @@ EOF
 
 cat > "${AUTHELIA_CONFIG}" <<EOF
 theme: auto
+certificates_directory: /tls
 
 server:
   address: 'tcp://:9091/authelia'
+  tls:
+    key: /tls/authelia.key
+    certificate: /tls/authelia.crt
   endpoints:
     authz:
       forward-auth:
@@ -266,6 +272,9 @@ session:
   redis:
     host: redis
     port: 6379
+    tls:
+      server_name: redis
+      skip_verify: false
 
 regulation:
   max_retries: 3

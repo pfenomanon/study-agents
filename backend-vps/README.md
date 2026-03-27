@@ -15,7 +15,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
 - `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `deploy`, `start-local-all`, `apply-schema`, `restart`, `validate`, `status`, `logs`, `stop`).
-- `scripts/validate_backend_stack.sh`: waits for required containers and runs HTTP smoke checks for CAG/RAG/Copilot/frontend endpoints.
+- `scripts/validate_backend_stack.sh`: waits for required containers and runs HTTPS smoke checks for CAG/RAG/Copilot/frontend, plus Vault TLS checks when Vault is running.
 - `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
 - `scripts/generate_local_api_keys.sh`: generates local service auth tokens (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`) with compatible entropy/format.
 - `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
@@ -29,7 +29,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 
 ## CAG HTTP API & Thin Client
 
-- `study-agents-api` runs a small HTTP server inside the Docker container (port `8000`) that exposes:
+- `study-agents-api` runs a small API server inside the Docker container (port `8000`, HTTPS in compose by default via internal certs) that exposes:
   - `POST /cag-answer` – body `{"question": "..."}` -> CAGAgent.enhanced_retrieve_context (vector + knowledge graph) -> answer JSON.
   - `POST /cag-ocr-answer` – multipart `image=@screenshot.png` -> OCR + CAGAgent.enhanced_retrieve_context -> answer JSON.
 - Every successful call appends a Markdown entry to `data/qa_sessions/qa_log.md` with:
@@ -165,13 +165,14 @@ Example interactions:
 # Build and start everything
 docker compose up -d --build
 
-# Test CAG HTTP API
-curl -X POST http://localhost:8000/cag-answer \
+# Test CAG API over local TLS
+CA=docker/internal-tls/internal-ca.crt
+curl --cacert "$CA" -X POST https://localhost:8000/cag-answer \
   -H "Content-Type: application/json" \
   -d '{"question": "What are the eligibility requirements for TWIA coverage?"}'
 
-# Trigger RAG builder via HTTP
-curl -X POST http://localhost:8100/build \
+# Trigger RAG builder over local TLS
+curl --cacert "$CA" -X POST https://localhost:8100/build \
   -H "Content-Type: application/json" \
   -d '{"pdf_path": "/app/data/pdf/TWIA-Commercial-Policy-HB-3208.pdf", "outdir": "/app/data/output", "push": true}'
 
@@ -288,9 +289,10 @@ Press `Ctrl+C` to stop every managed process gracefully.
 - File-processing endpoints are root-constrained. Configure allowlists via `RAG_ALLOWED_INPUT_ROOTS`, `RAG_ALLOWED_OUTPUT_ROOTS`, and `COPILOT_ALLOWED_FILE_ROOTS`.
 - Web crawling blocks localhost/private-network targets by default (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`) to reduce SSRF risk.
 - Containers drop root privileges (`USER app`). Bind only required ports; the default compose uses an internal `backend` network.
-- TLS is terminated on the machine via `tls-gateway` (Caddy). Point `PUBLIC_DOMAIN` DNS to the host and use `https://<domain>/...` from remote clients.
+- TLS is terminated on the machine via `tls-gateway` (Caddy), and internal service hops are also TLS-encrypted with a private CA (`scripts/bootstrap_internal_tls.sh`).
 - Keep direct service ports (`8000`, `8100`, `9010`) private; expose only the TLS gateway (`443`) for remote clients.
-- Vault (optional, OSS): a Vault dev service is included in compose. If `VAULT_ADDR`/`VAULT_TOKEN` are set, containers will attempt to fetch secrets from `kv/data/study-agents/*` via `scripts/use_env.sh` and render `/env/.env.runtime`. Default is dev/root token; replace with a secure Vault deployment for production.
+- For LAN/internal PKI gateway access, export trust material with `bash scripts/export_caddy_root_ca.sh` (root + intermediate + chain), remove stale `Caddy Local Authority` certs on clients, then import the current certs.
+- Vault (optional, OSS): a Vault dev service is included in compose and now runs with TLS enabled (`https://vault:8200` internally, `https://127.0.0.1:8200` on host). Containers read `VAULT_ADDR_INTERNAL`/`VAULT_CACERT_INTERNAL` to fetch secrets from `kv/data/study-agents/*` via `scripts/use_env.sh` and render `/env/.env.runtime`. Default is dev/root token; replace with a secure Vault deployment for production.
 
 ## Testing
 
@@ -332,7 +334,7 @@ supabase status
 docker ps --format '{{.Names}}\t{{.Image}}' | rg -i 'supabase|study-agents'
 ```
 
-Supabase Studio (GUI) and APIs are exposed on `http://127.0.0.1:5432x` ports (the CLI output lists the exact URLs). Tunnel or proxy those ports if you need remote access.
+Supabase Studio (GUI) and APIs are exposed on local `127.0.0.1:5432x` ports (the CLI output lists exact URLs). API TLS can be enabled via `supabase/config.toml` (`[api.tls]`) and provisioned by `scripts/bootstrap_internal_tls.sh`.
 
 ## One-Step Bootstrap
 

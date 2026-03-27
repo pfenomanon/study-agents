@@ -1,0 +1,10 @@
+{
+  auto_https disable_redirects
+  admin off
+}
+
+:3443 {
+  tls /tls/copilot-frontend.crt /tls/copilot-frontend.key
+
+  reverse_proxy 127.0.0.1:3000
+}

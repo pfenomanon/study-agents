@@ -7,25 +7,38 @@ set -euo pipefail
 #   bash scripts/install_backend_vps.sh start
 #   bash scripts/install_backend_vps.sh deploy
 #   bash scripts/install_backend_vps.sh start-local-all
+#   bash scripts/install_backend_vps.sh bootstrap-internal-tls
+#   bash scripts/install_backend_vps.sh configure-lan-https <public-domain-or-ip> [allow-cidr]
+#   bash scripts/install_backend_vps.sh export-caddy-ca [output-path]
+#   bash scripts/install_backend_vps.sh reclaim-disk
 #   bash scripts/install_backend_vps.sh validate
 #   bash scripts/install_backend_vps.sh status
 #   bash scripts/install_backend_vps.sh logs
 #   bash scripts/install_backend_vps.sh stop
 
 ACTION="${1:-start}"
+ARG1="${2:-}"
+ARG2="${3:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
 if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
   cat <<'EOF'
-Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|apply-schema|restart|validate|status|logs|stop]
+Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|bootstrap-internal-tls|configure-lan-https|export-caddy-ca|reclaim-disk|apply-schema|restart|validate|status|logs|stop]
 
 Actions:
   deps             Install host dependencies and create .env if missing
   start            Validate env + run docker compose up -d --build
   deploy           deps + start + backend validation checks (recommended)
   start-local-all  Install deps + start local Supabase + apply schema + start backend stack
+  bootstrap-internal-tls
+                   Generate private CA + per-service TLS certs used for encrypted internal hops
+  configure-lan-https <public-domain-or-ip> [allow-cidr]
+                   Configure HTTPS gateway for LAN usage, bootstrap Authelia, recreate gateway/auth
+  export-caddy-ca [output-path]
+                   Export Caddy local root/intermediate certificates (+ chain bundle) and print trust commands
+  reclaim-disk     Reclaim host disk space (docker build cache/images + apt/journal cleanup)
   apply-schema     Apply supabase_schema.sql using SUPABASE_DB_URL (or detected local DB URL)
   restart          Restart stack
   validate         Validate running stack services and endpoints
@@ -143,14 +156,21 @@ install_deps() {
   $SUDO apt-get update -y
 
   if ! command -v docker >/dev/null 2>&1; then
-    log "Installing Docker Engine + Compose plugin..."
-    $SUDO apt-get install -y docker.io docker-compose-plugin
+    log "Installing Docker Engine + Compose package..."
+    if ! $SUDO apt-get install -y docker.io docker-compose-plugin; then
+      $SUDO apt-get install -y docker.io docker-compose-v2
+    fi
     $SUDO systemctl enable --now docker || true
   else
     log "Docker already installed."
   fi
 
-  ensure_pkg docker-compose-plugin
+  if ! docker compose version >/dev/null 2>&1; then
+    log "Installing docker compose package..."
+    if ! $SUDO apt-get install -y docker-compose-plugin; then
+      $SUDO apt-get install -y docker-compose-v2
+    fi
+  fi
   ensure_pkg curl
   ensure_pkg ca-certificates
   ensure_pkg git
@@ -170,7 +190,7 @@ install_deps() {
   fi
 
   if ! docker compose version >/dev/null 2>&1; then
-    die "docker compose plugin is not available after dependency install."
+    die "docker compose is not available after dependency install."
   fi
 
   ensure_env_file
@@ -389,6 +409,13 @@ validate_runtime_env() {
   ensure_required_tokens
 }
 
+bootstrap_internal_tls() {
+  local bootstrap_script="${SCRIPT_DIR}/bootstrap_internal_tls.sh"
+  [[ -f "${bootstrap_script}" ]] || die "Missing internal TLS bootstrap script: ${bootstrap_script}"
+  chmod +x "${bootstrap_script}"
+  run_repo_script_with_docker_access "${bootstrap_script}"
+}
+
 run_stack_validation() {
   local validator="${SCRIPT_DIR}/validate_backend_stack.sh"
   if [[ ! -f "$validator" ]]; then
@@ -417,12 +444,58 @@ dc() {
   fi
 }
 
+docker_group_has_user() {
+  local account
+  account="${SUDO_USER:-$USER}"
+  getent group docker 2>/dev/null | awk -F: -v account="$account" '
+    BEGIN { found = 0 }
+    {
+      split($4, members, ",")
+      for (i in members) {
+        if (members[i] == account) {
+          found = 1
+        }
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
+run_repo_script_with_docker_access() {
+  local script_path="$1"
+  shift || true
+  local cmd=(bash "$script_path" "$@")
+
+  if docker info >/dev/null 2>&1; then
+    (
+      cd "$ROOT_DIR"
+      PATH="$HOME/.local/bin:$PATH" "${cmd[@]}"
+    )
+    return 0
+  fi
+
+  if command -v sg >/dev/null 2>&1 && docker_group_has_user; then
+    local cmd_joined="" part root_q path_q
+    for part in "${cmd[@]}"; do
+      printf -v part "%q" "$part"
+      cmd_joined+="${part} "
+    done
+    printf -v root_q "%q" "$ROOT_DIR"
+    printf -v path_q "%q" "$HOME/.local/bin:$PATH"
+    sg docker -c "cd ${root_q} && PATH=${path_q} ${cmd_joined}"
+    return 0
+  fi
+
+  die "Docker access unavailable for this shell. Re-login (or run 'newgrp docker') and retry."
+}
+
 case "$ACTION" in
   deps)
     install_deps
     ;;
   start)
     install_deps
+    bootstrap_internal_tls
     validate_runtime_env
     log "Starting backend stack..."
     dc up -d --build
@@ -430,6 +503,7 @@ case "$ACTION" in
     ;;
   deploy)
     install_deps
+    bootstrap_internal_tls
     validate_runtime_env
     log "Deploying backend stack..."
     dc up -d --build
@@ -439,14 +513,32 @@ case "$ACTION" in
   start-local-all)
     install_deps
     install_supabase_cli
+    bootstrap_internal_tls
     log "Starting local Supabase..."
-    bash scripts/setup_local_supabase.sh
+    run_repo_script_with_docker_access scripts/setup_local_supabase.sh
     validate_runtime_env
     apply_supabase_schema
     log "Starting backend stack..."
     dc up -d --build
     dc ps
     run_stack_validation
+    ;;
+  bootstrap-internal-tls)
+    install_deps
+    bootstrap_internal_tls
+    ;;
+  configure-lan-https)
+    install_deps
+    bootstrap_internal_tls
+    run_repo_script_with_docker_access scripts/configure_lan_https.sh "$ARG1" "$ARG2"
+    ;;
+  export-caddy-ca)
+    install_deps
+    run_repo_script_with_docker_access scripts/export_caddy_root_ca.sh "$ARG1"
+    ;;
+  reclaim-disk)
+    install_deps
+    run_repo_script_with_docker_access scripts/reclaim_disk_space.sh
     ;;
   apply-schema)
     install_deps
@@ -457,6 +549,7 @@ case "$ACTION" in
     ;;
   restart)
     install_deps
+    bootstrap_internal_tls
     validate_runtime_env
     log "Restarting backend stack..."
     dc down
@@ -466,6 +559,7 @@ case "$ACTION" in
     ;;
   validate)
     ensure_env_file
+    bootstrap_internal_tls
     validate_runtime_env
     run_stack_validation
     ;;

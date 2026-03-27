@@ -4,7 +4,7 @@ const BACKEND_CAPTURE_IMAGE =
   process.env.COPILOT_CAPTURE_IMAGE_URL ||
   (process.env.COPILOT_BACKEND_URL
     ? process.env.COPILOT_BACKEND_URL.replace("/copilot/chat", "/copilot/capture-image")
-    : "http://localhost:9010/copilot/capture-image");
+    : "https://copilot-service:9010/copilot/capture-image");
 const COPILOT_API_KEY = (process.env.COPILOT_API_KEY || process.env.API_TOKEN || "").trim();
 
 async function fetchWithRetry(url: string, init: RequestInit, retries = 2) {

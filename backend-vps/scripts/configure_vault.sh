@@ -12,7 +12,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT}/.env"
-VAULT_ADDR_DEFAULT="${VAULT_ADDR:-http://localhost:8200}"
+VAULT_ADDR_DEFAULT="${VAULT_ADDR:-https://127.0.0.1:8200}"
+VAULT_CACERT_DEFAULT="${VAULT_CACERT:-${ROOT}/docker/internal-tls/vault-ca.pem}"
 VAULT_TOKEN_DEFAULT="${VAULT_TOKEN:-root}"
 
 require_cmd() {
@@ -27,16 +28,19 @@ echo "==> Starting stack (docker compose up -d --build)..."
 docker compose -f "${ROOT}/docker-compose.yml" up -d --build
 
 VAULT_ADDR="${VAULT_ADDR_DEFAULT}"
+VAULT_CACERT="${VAULT_CACERT_DEFAULT}"
 VAULT_TOKEN="${VAULT_TOKEN_DEFAULT}"
 
 read -rp "Vault address [${VAULT_ADDR}]: " addr_input
 VAULT_ADDR="${addr_input:-$VAULT_ADDR}"
+read -rp "Vault CA cert [${VAULT_CACERT}]: " cacert_input
+VAULT_CACERT="${cacert_input:-$VAULT_CACERT}"
 read -rp "Vault token [${VAULT_TOKEN}]: " token_input
 VAULT_TOKEN="${token_input:-$VAULT_TOKEN}"
 
 echo "==> Waiting for Vault to respond at ${VAULT_ADDR}..."
 for i in $(seq 1 30); do
-  if curl -sSf "${VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+  if curl -sSf --cacert "${VAULT_CACERT}" "${VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -65,19 +69,22 @@ prompt_secret "API_TOKEN (for CAG API)" API_TOKEN
 prompt_secret "COPILOT_API_KEY (for Copilot endpoints)" COPILOT_API_KEY
 
 echo "==> Writing secrets to Vault KV (kv/study-agents/*)..."
-export VAULT_ADDR VAULT_TOKEN
+export VAULT_ADDR VAULT_TOKEN VAULT_CACERT
 vault kv put kv/study-agents/openai value="${OPENAI_API_KEY}"
 vault kv put kv/study-agents/supabase-url value="${SUPABASE_URL}"
 vault kv put kv/study-agents/supabase-key value="${SUPABASE_KEY}"
 vault kv put kv/study-agents/api-token value="${API_TOKEN}"
 vault kv put kv/study-agents/copilot-api-key value="${COPILOT_API_KEY}"
 
-echo "==> Updating .env with VAULT_ADDR / VAULT_TOKEN (sensitive; for local use only)..."
+echo "==> Updating .env with Vault TLS settings (sensitive; for local use only)..."
 touch "${ENV_FILE}"
 cp "${ENV_FILE}" "${ENV_FILE}.bak.$(date +%s)"
-grep -vE '^(VAULT_ADDR|VAULT_TOKEN)=' "${ENV_FILE}" > "${ENV_FILE}.tmp" || true
+grep -vE '^(VAULT_ADDR|VAULT_CACERT|VAULT_ADDR_INTERNAL|VAULT_CACERT_INTERNAL|VAULT_TOKEN)=' "${ENV_FILE}" > "${ENV_FILE}.tmp" || true
 {
   echo "VAULT_ADDR=${VAULT_ADDR}"
+  echo "VAULT_CACERT=${VAULT_CACERT}"
+  echo "VAULT_ADDR_INTERNAL=https://vault:8200"
+  echo "VAULT_CACERT_INTERNAL=/tls/vault-ca.pem"
   echo "VAULT_TOKEN=${VAULT_TOKEN}"
 } >> "${ENV_FILE}.tmp"
 mv "${ENV_FILE}.tmp" "${ENV_FILE}"
@@ -88,7 +95,8 @@ docker compose -f "${ROOT}/docker-compose.yml" up -d
 cat <<'EOF'
 All done.
 - Secrets stored under kv/study-agents/* in Vault.
-- VAULT_ADDR / VAULT_TOKEN written to .env (backup created). Remove/rotate as needed.
+- VAULT_ADDR / VAULT_CACERT / VAULT_TOKEN written to .env (backup created). Remove/rotate as needed.
+- VAULT_ADDR_INTERNAL / VAULT_CACERT_INTERNAL written for container-to-vault TLS.
 - Services restarted; use_env.sh will pull secrets at startup.
 Security note: Do not keep real tokens/keys in .env for shared/prod environments.
 EOF

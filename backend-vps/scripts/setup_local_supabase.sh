@@ -4,129 +4,153 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-command -v supabase >/dev/null 2>&1 || {
-  echo "Supabase CLI not found. Installing..."
-  curl -fsSL https://app.supabase.com/api/install/cli | sh
-  export PATH="$HOME/.supabase/bin:$PATH"
+log() {
+  echo "==> $*"
 }
 
-export PATH="$HOME/.supabase/bin:$PATH"
-
-echo "Starting Supabase stack (this may take a minute)..."
-supabase start
-
-SUPA_URL=""
-SUPA_SERVICE_KEY=""
-SUPA_ANON_KEY=""
-SUPA_KEY=""
-
-STATUS_JSON="$(supabase status -o json 2>/dev/null || supabase status --json 2>/dev/null || true)"
-if [[ -n "$STATUS_JSON" ]]; then
-  if read -r SUPA_URL SUPA_SERVICE_KEY SUPA_ANON_KEY <<<"$(python - <<'PY' || true
-import json, os, sys
-
-try:
-    data = json.loads(os.environ.get("STATUS_JSON", "{}"))
-except json.JSONDecodeError:
-    sys.exit(1)
-
-api = data.get("services", {}).get("api", {})
-url = (
-    api.get("rest_url")
-    or api.get("api_url")
-    or api.get("url")
-    or api.get("restUrl")
-    or ""
-)
-anon_key = api.get("rest_anon_key") or api.get("anon_key") or api.get("restAnonKey") or ""
-service_role_key = (
-    api.get("service_role_key")
-    or api.get("serviceRoleKey")
-    or api.get("service_key")
-    or api.get("serviceKey")
-    or ""
-)
-if not url:
-    sys.exit(1)
-print(url, service_role_key, anon_key)
-PY
-)"; then
-    :
-  else
-    SUPA_URL=""
-    SUPA_SERVICE_KEY=""
-    SUPA_ANON_KEY=""
-  fi
-fi
-
-if [[ -z "$SUPA_URL" ]]; then
-  STATUS_ENV="$(supabase status -o env \
-      --override-name api.url=SUPABASE_URL \
-      --override-name api.rest_url=SUPABASE_URL \
-      --override-name api.service_role_key=SUPABASE_SERVICE_KEY \
-      --override-name api.serviceRoleKey=SUPABASE_SERVICE_KEY \
-      --override-name api.anon_key=SUPABASE_KEY \
-      --override-name api.rest_anon_key=SUPABASE_KEY 2>/dev/null || true)"
-  if [[ -n "$STATUS_ENV" ]]; then
-    SUPA_URL="$(printf '%s\n' "$STATUS_ENV" | grep '^SUPABASE_URL=' | head -n1 | cut -d= -f2-)"
-    SUPA_SERVICE_KEY="$(printf '%s\n' "$STATUS_ENV" | grep '^SUPABASE_SERVICE_KEY=' | head -n1 | cut -d= -f2-)"
-    SUPA_ANON_KEY="$(printf '%s\n' "$STATUS_ENV" | grep '^SUPABASE_KEY=' | head -n1 | cut -d= -f2-)"
-  fi
-fi
-
-if [[ -z "$SUPA_URL" ]]; then
-  echo "Could not determine Supabase URL from status output."
+die() {
+  echo "ERROR: $*" >&2
   exit 1
-fi
+}
 
+export PATH="$HOME/.local/bin:$HOME/.supabase/bin:$PATH"
+
+install_supabase_cli() {
+  if command -v supabase >/dev/null 2>&1; then
+    return 0
+  fi
+
+  log "Supabase CLI not found. Installing..."
+
+  # Primary installer (may fail on some hosts).
+  if curl -fsSL https://app.supabase.com/api/install/cli | sh; then
+    export PATH="$HOME/.supabase/bin:$PATH"
+  fi
+
+  if command -v supabase >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Fallback installer from GitHub release.
+  local arch asset tmp_dir
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)
+      asset="supabase_linux_amd64.tar.gz"
+      ;;
+    aarch64|arm64)
+      asset="supabase_linux_arm64.tar.gz"
+      ;;
+    *)
+      die "Unsupported architecture for Supabase CLI: ${arch}"
+      ;;
+  esac
+
+  tmp_dir="$(mktemp -d)"
+  mkdir -p "$HOME/.local/bin"
+  curl -fL "https://github.com/supabase/cli/releases/latest/download/${asset}" -o "${tmp_dir}/supabase.tar.gz"
+  tar -xzf "${tmp_dir}/supabase.tar.gz" -C "${tmp_dir}"
+  install -m 755 "${tmp_dir}/supabase" "$HOME/.local/bin/supabase"
+  rm -rf "${tmp_dir}"
+
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v supabase >/dev/null 2>&1 || die "Supabase CLI installation failed."
+}
+
+ensure_supabase_project() {
+  if [[ -f "supabase/config.toml" ]]; then
+    return 0
+  fi
+  log "Initializing local Supabase project config..."
+  supabase init --yes
+}
+
+start_supabase() {
+  log "Starting local Supabase (minimal profile)..."
+  if ! supabase start \
+    -x studio \
+    -x realtime \
+    -x storage-api \
+    -x imgproxy \
+    -x edge-runtime \
+    -x logflare \
+    -x vector \
+    -x postgres-meta \
+    -x supavisor \
+    -x mailpit; then
+    log "Minimal start failed, retrying full supabase start..."
+    supabase start
+  fi
+}
+
+upsert_env() {
+  local key="$1"
+  local value="$2"
+  local tmp
+
+  [[ -f .env ]] || touch .env
+
+  tmp="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    $0 ~ ("^" key "=") { print key "=" value; updated = 1; next }
+    { print }
+    END { if (!updated) print key "=" value }
+  ' .env > "$tmp"
+  mv "$tmp" .env
+}
+
+extract_status_value() {
+  local key="$1"
+  local status_env="$2"
+  printf '%s\n' "$status_env" | awk -F= -v key="$key" '$1 == key {print $2; exit}' | tr -d '"'
+}
+
+install_supabase_cli
+ensure_supabase_project
+bash scripts/bootstrap_internal_tls.sh
+start_supabase
+
+STATUS_ENV="$(supabase status -o env 2>/dev/null || supabase status --env 2>/dev/null || true)"
+[[ -n "$STATUS_ENV" ]] || die "Could not read 'supabase status -o env'."
+
+SUPA_API_URL="$(extract_status_value API_URL "$STATUS_ENV")"
+SUPA_DB_URL="$(extract_status_value DB_URL "$STATUS_ENV")"
+SUPA_SERVICE_KEY="$(extract_status_value SERVICE_ROLE_KEY "$STATUS_ENV")"
+SUPA_SECRET_KEY="$(extract_status_value SECRET_KEY "$STATUS_ENV")"
+SUPA_ANON_KEY="$(extract_status_value ANON_KEY "$STATUS_ENV")"
+
+[[ -n "$SUPA_API_URL" ]] || die "Could not determine API_URL from Supabase status output."
+[[ -n "$SUPA_DB_URL" ]] || die "Could not determine DB_URL from Supabase status output."
+
+SUPA_KEY=""
 if [[ -n "$SUPA_SERVICE_KEY" ]]; then
   SUPA_KEY="$SUPA_SERVICE_KEY"
+elif [[ -n "$SUPA_SECRET_KEY" ]]; then
+  SUPA_KEY="$SUPA_SECRET_KEY"
 elif [[ -n "$SUPA_ANON_KEY" ]]; then
   SUPA_KEY="$SUPA_ANON_KEY"
 else
-  echo "Could not determine Supabase key from status output."
-  exit 1
+  die "Could not determine a usable Supabase key from status output."
 fi
 
-echo "Supabase REST URL: $SUPA_URL"
-if [[ -n "$SUPA_SERVICE_KEY" ]]; then
-  echo "Supabase key mode: service_role (recommended for backend ingestion/writes)"
+SUPA_API_PORT="$(printf '%s' "$SUPA_API_URL" | sed -E 's#^https?://[^:/]+:([0-9]+).*$#\1#')"
+if [[ ! "$SUPA_API_PORT" =~ ^[0-9]+$ ]]; then
+  SUPA_API_PORT="54321"
+fi
+
+SUPA_CONTAINER_URL="https://host.docker.internal:${SUPA_API_PORT}"
+
+upsert_env SUPABASE_URL "$SUPA_CONTAINER_URL"
+upsert_env SUPABASE_KEY "$SUPA_KEY"
+upsert_env SUPABASE_DB_URL "$SUPA_DB_URL"
+
+echo "Supabase API URL for backend containers: $SUPA_CONTAINER_URL"
+echo "Supabase DB URL: $SUPA_DB_URL"
+if [[ "$SUPA_KEY" == "$SUPA_SERVICE_KEY" ]]; then
+  echo "Supabase key mode: service_role"
 else
-  echo "Supabase key mode: anon (limited). Consider setting SUPABASE_KEY to service_role manually for full capabilities."
+  echo "Supabase key mode: non-service (limited)"
 fi
-
-ENV_FILE="$ROOT_DIR/.env"
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo ".env not found; creating a new one."
-  touch "$ENV_FILE"
-fi
-
-python - "$ENV_FILE" "$SUPA_URL" "$SUPA_KEY" <<'PY'
-import sys, pathlib
-
-path = pathlib.Path(sys.argv[1])
-url = sys.argv[2]
-key = sys.argv[3]
-
-lines = path.read_text().splitlines()
-out = []
-found_url = False
-found_key = False
-for line in lines:
-    if line.startswith("SUPABASE_URL="):
-        out.append(f"SUPABASE_URL={url}")
-        found_url = True
-    elif line.startswith("SUPABASE_KEY="):
-        out.append(f"SUPABASE_KEY={key}")
-        found_key = True
-    else:
-        out.append(line)
-if not found_url:
-    out.append(f"SUPABASE_URL={url}")
-if not found_key:
-    out.append(f"SUPABASE_KEY={key}")
-path.write_text("\n".join(out) + "\n")
-PY
-
-echo ".env updated with local Supabase credentials."
-echo "Local Supabase Studio is typically available at http://127.0.0.1:54323 (check supabase start output)."
+echo ".env updated with local Supabase values."
+echo "Next step: psql \"$SUPA_DB_URL\" -v ON_ERROR_STOP=1 -f supabase_schema.sql"

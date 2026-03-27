@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 
-const CHAT_BACKEND = process.env.COPILOT_BACKEND_URL || "http://copilot-service:9010/copilot/chat";
+const CHAT_BACKEND = process.env.COPILOT_BACKEND_URL || "https://copilot-service:9010/copilot/chat";
 const BASE = CHAT_BACKEND.replace(/\/copilot\/chat$/, "");
 const COPILOT_API_KEY = (process.env.COPILOT_API_KEY || process.env.API_TOKEN || "").trim();
 const DATA_ROOT = path.resolve("/app/data");

@@ -1,226 +1,225 @@
-# ZimaBoard 16GB Deployment Guide
+# ZimaBoard 2 (16GB) Deployment Guide
 
-This guide is for running the `backend-vps` stack on a ZimaBoard-class x86_64 host with 16GB RAM using Docker Compose.
+This guide is the full step-by-step path for ZimaBoard deployment with:
+- local Supabase in Docker
+- backend stack containers
+- HTTPS LAN access through `tls-gateway`
+- internal hop-by-hop TLS for CAG/RAG/Copilot/frontend + Vault
 
-It assumes you are starting from a brand-new board with no operating system installed.
-
-It adds:
-- a Zima-specific compose override: `docker-compose.zimaboard.yml`
-- a host prep/start script: `scripts/install_zimaboard_16gb.sh`
-- a stack validation script: `scripts/validate_zimaboard_stack.sh`
-
-## Scope and assumptions
-
-- Fresh hardware is acceptable (no OS preinstalled).
-- Target OS for this guide: Debian/Ubuntu Linux on x86_64.
-- Hardware: 16GB RAM host (for example, ZimaBoard 2 1664)
-- Storage: SSD preferred for `/var/lib/docker` and repo data
-- Network: internet egress to OpenAI/Supabase and package repos
-
-## 0) Install Linux OS (required on new board)
-
-Perform these steps on a separate laptop/desktop first:
-
-1. Download one of:
-   - Debian 12 (amd64)
-   - Ubuntu Server 22.04/24.04 LTS (amd64)
-2. Flash the ISO to a USB drive (for example with Balena Etcher or Rufus).
-3. Connect keyboard, monitor, ethernet, and the USB installer to the ZimaBoard.
-4. Boot from USB and complete OS install:
-   - hostname: choose a stable name (example: `zimaboard-study-agents`)
-   - user: create a sudo-capable admin user
-   - disk: install to the internal SSD/eMMC you want to run Docker on
-   - network: DHCP is fine initially; static IP is optional
-   - packages: include `OpenSSH server`
-5. Reboot into the installed OS and log in.
-6. Confirm baseline:
+## 0) One-command install/deploy path
 
 ```bash
-uname -m
-cat /etc/os-release
-sudo -v
+cd /home/user1/study-agents/backend-vps
+bash scripts/install_backend_vps.sh start-local-all
 ```
 
-Expected:
-- `uname -m` returns `x86_64`
-- OS is Debian/Ubuntu
-- sudo works without errors
+The installer handles Docker group session timing by using `sg docker` fallback for Docker-dependent helper scripts when needed.
 
-## 1) Clone and enter backend path
+Then run LAN HTTPS setup:
+
+```bash
+bash scripts/install_backend_vps.sh configure-lan-https 10.72.72.161 10.72.72.0/24
+bash scripts/install_backend_vps.sh export-caddy-ca
+```
+
+## 1) Manual full path
+
+### 1.1 Install host packages
+
+```bash
+sudo apt-get update -y
+sudo apt-get install -y \
+  docker.io docker-compose-v2 \
+  curl jq ca-certificates python3 python3-venv \
+  postgresql-client git openssl unzip
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+```
+
+Open a new shell.
+
+### 1.2 Clone and enter repo
 
 ```bash
 git clone git@github.com:pfenomanon/study-agents.git
 cd study-agents/backend-vps
 ```
 
-## 2) Host preparation (one command)
-
-This action installs Docker/Compose if missing, provisions swap, applies sysctl tuning, and creates `.env` if absent.
+### 1.3 Initialize `.env`
 
 ```bash
-bash scripts/install_zimaboard_16gb.sh prepare
+cp -n .env.example .env
+sed -i 's|^PUBLIC_DOMAIN=.*|PUBLIC_DOMAIN=127.0.0.1|' .env
+sed -i 's|^ACME_EMAIL=.*|ACME_EMAIL=you@example.com|' .env
+sed -i 's|^OPENAI_API_KEY=.*|OPENAI_API_KEY=sk-REPLACE_ME|' .env
+sed -i 's|^COPILOT_SERVICE_WORKERS=.*|COPILOT_SERVICE_WORKERS=1|' .env
 ```
 
-Default host tuning performed:
-- swap file: `/swapfile-study-agents` (8GB)
-- sysctl file: `/etc/sysctl.d/99-study-agents-zimaboard.conf`
-
-Optional overrides:
-
-```bash
-SWAP_SIZE_GB=6 MIN_FREE_DISK_GB=20 bash scripts/install_zimaboard_16gb.sh prepare
-```
-
-## 3) Configure `.env`
-
-Populate required keys in `backend-vps/.env`:
+Set real values for:
 - `OPENAI_API_KEY`
+- `ACME_EMAIL`
+
+### 1.4 Generate API keys and bootstrap auth
+
+```bash
+bash scripts/bootstrap_internal_tls.sh
+bash scripts/generate_local_api_keys.sh --write-env --overwrite
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_authelia.sh'
+```
+
+### 1.5 Setup local Supabase and write runtime env
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && PATH=$HOME/.local/bin:$PATH bash scripts/setup_local_supabase.sh'
+```
+
+This script installs/starts Supabase, then writes:
 - `SUPABASE_URL`
-- `SUPABASE_KEY` (service role key recommended for backend writes/ingestion)
+- `SUPABASE_KEY`
+- `SUPABASE_DB_URL`
 
-Token defaults (enabled by default):
-- `API_REQUIRE_TOKEN=true`
-- `RAG_REQUIRE_TOKEN=true`
-- `COPILOT_REQUIRE_TOKEN=true`
-
-Service token keys:
-- `API_TOKEN`
-- `RAG_API_TOKEN`
-- `COPILOT_API_KEY`
-- optional `SCENARIO_API_KEY` (if scenario API is enabled)
-
-Generate local backend service tokens (optional; `start` auto-generates missing required values):
+### 1.6 Apply schema to local DB
 
 ```bash
-# Recommended: URL-safe tokens, 32 random bytes each
-bash scripts/generate_local_api_keys.sh --write-env
+psql "$(awk -F= '/^SUPABASE_DB_URL=/{print $2}' .env)" -v ON_ERROR_STOP=1 -f supabase_schema.sql
 ```
 
-Compatibility guidance:
-- minimum entropy: 32 random bytes (256-bit) per key
-- accepted practical formats: URL-safe token (~43 chars) or hex (64 chars)
-- keep service keys distinct rather than reusing one token everywhere
-
-Recommended memory setting for 16GB hosts:
-- `COPILOT_SERVICE_WORKERS=1`
-
-## 4) Apply Supabase schema
-
-Use one of these methods:
-- Supabase Cloud: run `supabase_schema.sql` in the Supabase SQL Editor.
-- CLI/DSN path: set `SUPABASE_DB_URL` in `.env`, then run:
+### 1.7 Start backend stack
 
 ```bash
-bash scripts/install_backend_vps.sh apply-schema
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --build'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --force-recreate cag-service rag-service copilot-service copilot-frontend tls-gateway authelia redis vault'
 ```
 
-## 5) Start stack (build + run + validation)
+### 1.8 Validate
 
 ```bash
-bash scripts/install_zimaboard_16gb.sh start
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/validate_zimaboard_stack.sh'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/validate_backend_stack.sh'
 ```
 
-What this does:
-- validates required `.env` keys
-- validates merged compose config (`docker-compose.yml` + `docker-compose.zimaboard.yml`)
-- starts services with rebuild
-- runs `scripts/validate_zimaboard_stack.sh`
+## 2) Configure LAN HTTPS gateway
 
-Default expected running services:
-- `cag-service`
-- `rag-service`
-- `copilot-service`
-- `copilot-frontend`
-- `redis`
-- `authelia`
-- `tls-gateway`
-
-Optional services are kept off by default on 16GB:
-- `utility-service` profile `tools`
-- `vault` profile `vault`
-
-Start optional services only when needed:
+Use this after backend is running.
 
 ```bash
-bash scripts/install_zimaboard_16gb.sh start-tools
-bash scripts/install_zimaboard_16gb.sh start-vault
+bash scripts/configure_lan_https.sh 10.72.72.161 10.72.72.0/24
 ```
+
+What it updates:
+- `PUBLIC_DOMAIN`
+- `AUTHELIA_OIDC_CLIENT_REDIRECT_URI`
+- `GATEWAY_ALLOWED_CIDRS`
+- regenerates Authelia config and recreates `authelia` + `tls-gateway`
+
+Open from LAN clients:
+- `https://10.72.72.161/`
+
+## 3) Export and trust Caddy local CA
+
+Export root CA cert from server:
+
+```bash
+bash scripts/export_caddy_root_ca.sh
+```
+
+This exports:
+- `/home/user1/caddy-local-root.crt`
+- `/home/user1/caddy-local-intermediate.crt`
+- `/home/user1/caddy-local-chain.crt`
+
+Windows client import (PowerShell, run as Administrator):
+
+```powershell
+scp user1@10.72.72.161:/home/user1/caddy-local-root.crt $env:USERPROFILE\Downloads\
+scp user1@10.72.72.161:/home/user1/caddy-local-intermediate.crt $env:USERPROFILE\Downloads\
+
+$stores = @(
+  'Cert:\CurrentUser\Root', 'Cert:\CurrentUser\CA',
+  'Cert:\LocalMachine\Root', 'Cert:\LocalMachine\CA'
+)
+foreach ($store in $stores) {
+  Get-ChildItem $store | Where-Object { $_.Subject -like '*Caddy Local Authority*' } | Remove-Item -Force
+}
+
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation 'Cert:\CurrentUser\Root'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-intermediate.crt" -CertStoreLocation 'Cert:\CurrentUser\CA'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation 'Cert:\LocalMachine\Root'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-intermediate.crt" -CertStoreLocation 'Cert:\LocalMachine\CA'
+```
+
+Restart browser and reopen `https://10.72.72.161/`.
+Any time `caddy-data` is recreated (or Caddy local CA rotates), repeat this trust step on every client.
+
+## 4) URLs
+
+- Frontend through gateway (LAN HTTPS): `https://<PUBLIC_DOMAIN>/`
+- Frontend direct container bind (localhost only, internal cert): `https://127.0.0.1:3000/`
+- Supabase local API (TLS): `https://127.0.0.1:54321`
+
+Plaintext checks:
+- `http://127.0.0.1:8200` (Vault) is expected to fail with HTTP `400` because Vault is TLS-only.
+- `http://127.0.0.1:54321` (Supabase API) is expected to fail with HTTP `400`.
+
+## 4.1) E2E encryption verification commands
+
+```bash
+cd /home/user1/study-agents/backend-vps
+CA=docker/internal-tls/internal-ca.crt
+VAULT_CA=docker/internal-tls/vault-ca.pem
+
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8000/cag-answer -H 'content-type: application/json' --data '{"question":"health check"}'
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8100/build -H 'content-type: application/json' --data '{}'
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:9010/copilot/chat -H 'content-type: application/json' --data '{}'
+curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:3000/
+curl --cacert "$VAULT_CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8200/v1/sys/health
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8200/v1/sys/health
+GATEWAY_CA=/home/user1/caddy-local-root.crt
+curl --cacert "$GATEWAY_CA" --resolve 10.72.72.161:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}\n' https://10.72.72.161/healthz
+```
+
+Expected:
+- Service calls return acceptable app-level statuses.
+- Vault HTTPS returns `200` (or another valid health code).
+- Vault plaintext returns `400`.
+
+Exposure rule:
+- Publish only `443` to LAN/WAN clients.
+- Keep direct service ports (`3000`, `8000`, `8100`, `9010`, `8200`) local/private.
+
+## 5) Authelia one-time code during 2FA setup
+
+This stack is configured with Authelia filesystem notifier by default, so one-time identity verification codes are saved in `/config/notification.txt` inside the Authelia container (not delivered by SMTP email).
+
+When the browser prompts for a one-time code and no email is received:
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml exec -T authelia sh -lc "grep -E \"^[A-Z0-9]{8}$\" /config/notification.txt | tail -n 1"'
+```
+
+Important:
+- Keep the Identity Verification dialog open while fetching/entering the code.
+- If you click cancel/close, that code is invalidated; request a new code and re-run the command.
 
 ## 6) Operational commands
 
 ```bash
-# show status
-bash scripts/install_zimaboard_16gb.sh status
+# status
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml ps'
 
-# tail specific logs (default is cag-service)
-bash scripts/install_zimaboard_16gb.sh logs cag-service
+# logs
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml logs -f cag-service rag-service copilot-service authelia tls-gateway'
 
-# run validation checks again
-bash scripts/install_zimaboard_16gb.sh validate
-
-# stop stack
-bash scripts/install_zimaboard_16gb.sh stop
+# stop
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml down'
 ```
 
-## 7) Security gateway bootstrap (Authelia + TLS)
+## 7) Recovery: `No space left on device` during build
 
-If you are exposing the service externally (not VPN-only), bootstrap gateway auth before production use:
+If `pip install` or image build fails with `Errno 28`:
 
 ```bash
-./scripts/bootstrap_authelia.sh
-bash scripts/install_zimaboard_16gb.sh restart
+cd /home/user1/study-agents/backend-vps
+bash scripts/install_backend_vps.sh reclaim-disk
+bash scripts/install_backend_vps.sh restart
 ```
-
-Required `.env` values before bootstrap:
-- `PUBLIC_DOMAIN`
-- `ACME_EMAIL`
-
-If unset, bootstrap auto-generates:
-- `AUTHELIA_AUTH_PASSWORD`, `AUTHELIA_OIDC_CLIENT_SECRET` (24-char alphanumeric)
-- `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET` (64-char hex)
-- `docker/authelia/oidc_jwks_rs256.pem` (RSA-2048 signing key)
-
-## 8) Validation checklist
-
-Run:
-
-```bash
-bash scripts/validate_zimaboard_stack.sh
-```
-
-Validation script checks:
-- compose file integrity
-- required services in running state
-- HTTP reachability checks for:
-  - `http://127.0.0.1:8000/cag-answer`
-  - `http://127.0.0.1:8100/build`
-  - `http://127.0.0.1:9010/copilot/chat`
-  - `http://127.0.0.1:3000/`
-
-## 9) Recommended Zima workload profile
-
-- Run backend stack directly on host Docker (no extra VM layer)
-- Keep Docker data and bind mounts on SSD
-- Leave swap enabled to absorb transient OCR/RAG spikes
-- Enable optional `utility-service` and `vault` only when needed
-- Keep remote access private (VPN/IP allowlists + API tokens); expose only port `443`.
-
-## 10) Update procedure
-
-```bash
-cd /path/to/study-agents/backend-vps
-git pull
-bash scripts/install_zimaboard_16gb.sh start
-```
-
-## 11) Troubleshooting
-
-- `docker permission denied` after `prepare`:
-  - open a new shell session (docker group membership update).
-- service not starting:
-  - check logs: `bash scripts/install_zimaboard_16gb.sh logs <service>`
-  - re-run validation: `bash scripts/validate_zimaboard_stack.sh`
-- memory pressure:
-  - confirm swap active: `swapon --show`
-  - set `COPILOT_SERVICE_WORKERS=1`
-  - stop optional profiles (`tools`, `vault`) when not required.

@@ -7,6 +7,7 @@ import hmac
 import os
 import re
 import secrets
+import ssl
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -858,7 +859,17 @@ def create_app() -> web.Application:
 
 def main() -> None:
     app = create_app()
-    web.run_app(app, host="0.0.0.0", port=8000)
+    tls_cert = (os.getenv("TLS_CERT_FILE") or "").strip()
+    tls_key = (os.getenv("TLS_KEY_FILE") or "").strip()
+    if bool(tls_cert) != bool(tls_key):
+        raise RuntimeError("TLS_CERT_FILE and TLS_KEY_FILE must both be set when enabling TLS.")
+
+    ssl_context = None
+    if tls_cert and tls_key:
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
+
+    web.run_app(app, host="0.0.0.0", port=8000, ssl_context=ssl_context)
 
 
 if __name__ == "__main__":

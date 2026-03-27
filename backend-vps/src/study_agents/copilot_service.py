@@ -1318,11 +1318,27 @@ async def copilot_prepare_markdown(
 def main():
     import uvicorn
 
+    tls_cert = (os.getenv("TLS_CERT_FILE") or "").strip()
+    tls_key = (os.getenv("TLS_KEY_FILE") or "").strip()
+    if bool(tls_cert) != bool(tls_key):
+        raise RuntimeError("TLS_CERT_FILE and TLS_KEY_FILE must both be set when enabling TLS.")
+
+    workers = int(os.getenv("COPILOT_SERVICE_WORKERS", "2"))
+    if workers < 1:
+        workers = 1
+
+    uvicorn_kwargs: dict[str, Any] = {}
+    if tls_cert and tls_key:
+        uvicorn_kwargs["ssl_certfile"] = tls_cert
+        uvicorn_kwargs["ssl_keyfile"] = tls_key
+
     uvicorn.run(
         "study_agents.copilot_service:app",
         host="0.0.0.0",
         port=9010,
+        workers=workers,
         reload=False,
+        **uvicorn_kwargs,
     )
 
 

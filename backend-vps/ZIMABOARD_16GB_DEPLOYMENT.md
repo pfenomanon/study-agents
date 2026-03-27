@@ -96,7 +96,7 @@ sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_
 ```
 
 Vault bootstrap now applies Vault-first hardening:
-- runtime secrets synced to Vault are scrubbed from `.env`
+- runtime/Ollama/Authelia secrets synced to Vault are scrubbed from `.env`
 - backup is saved to `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`
 - plaintext env fallback remains off unless `ALLOW_PLAINTEXT_ENV_SECRETS=true`
 

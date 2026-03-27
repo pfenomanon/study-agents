@@ -49,7 +49,7 @@ require_cmd() {
 get_env() {
   local key="$1"
   [[ -f "${ENV_FILE}" ]] || return 0
-  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_FILE}"
+  awk -F= -v key="${key}" '$1 == key {print substr($0, length(key) + 2); exit}' "${ENV_FILE}"
 }
 
 set_env() {
@@ -300,6 +300,7 @@ main() {
 
   log "Syncing non-placeholder secrets from .env to Vault..."
   sync_env_secret_to_vault "${root_token}" OPENAI_API_KEY kv/study-agents/openai
+  sync_env_secret_to_vault "${root_token}" OLLAMA_API_KEY kv/study-agents/ollama-api-key
   sync_env_secret_to_vault "${root_token}" SUPABASE_URL kv/study-agents/supabase-url
   sync_env_secret_to_vault "${root_token}" SUPABASE_KEY kv/study-agents/supabase-key
   sync_env_secret_to_vault "${root_token}" API_TOKEN kv/study-agents/api-token
@@ -308,10 +309,19 @@ main() {
   sync_env_secret_to_vault "${root_token}" COPILOT_API_KEY kv/study-agents/copilot-api-key
   sync_env_secret_to_vault "${root_token}" SCENARIO_SUPABASE_URL kv/study-agents/scenario-supabase-url
   sync_env_secret_to_vault "${root_token}" SCENARIO_SUPABASE_KEY kv/study-agents/scenario-supabase-key
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_AUTH_USERNAME kv/study-agents/authelia-auth-username
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_AUTH_PASSWORD kv/study-agents/authelia-auth-password
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_OIDC_HMAC_SECRET kv/study-agents/authelia-oidc-hmac-secret
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_OIDC_CLIENT_SECRET kv/study-agents/authelia-oidc-client-secret
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_SESSION_SECRET kv/study-agents/authelia-session-secret
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_STORAGE_ENCRYPTION_KEY kv/study-agents/authelia-storage-encryption-key
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_JWT_SECRET kv/study-agents/authelia-jwt-secret
+  sync_env_secret_to_vault "${root_token}" AUTHELIA_VAULT_OIDC_CLIENT_SECRET kv/study-agents/authelia-vault-oidc-client-secret
 
   if is_true "${VAULT_SCRUB_ENV_SECRETS:-true}"; then
     log "Scrubbing plaintext runtime secrets from .env (backup retained)..."
     scrub_env_secret_for_vault_first OPENAI_API_KEY
+    scrub_env_secret_for_vault_first OLLAMA_API_KEY
     scrub_env_secret_for_vault_first SUPABASE_URL
     scrub_env_secret_for_vault_first SUPABASE_KEY
     scrub_env_secret_for_vault_first API_TOKEN
@@ -320,6 +330,14 @@ main() {
     scrub_env_secret_for_vault_first COPILOT_API_KEY
     scrub_env_secret_for_vault_first SCENARIO_SUPABASE_URL
     scrub_env_secret_for_vault_first SCENARIO_SUPABASE_KEY
+    scrub_env_secret_for_vault_first AUTHELIA_AUTH_USERNAME
+    scrub_env_secret_for_vault_first AUTHELIA_AUTH_PASSWORD
+    scrub_env_secret_for_vault_first AUTHELIA_OIDC_HMAC_SECRET
+    scrub_env_secret_for_vault_first AUTHELIA_OIDC_CLIENT_SECRET
+    scrub_env_secret_for_vault_first AUTHELIA_SESSION_SECRET
+    scrub_env_secret_for_vault_first AUTHELIA_STORAGE_ENCRYPTION_KEY
+    scrub_env_secret_for_vault_first AUTHELIA_JWT_SECRET
+    scrub_env_secret_for_vault_first AUTHELIA_VAULT_OIDC_CLIENT_SECRET
   else
     log "Keeping plaintext .env secrets (VAULT_SCRUB_ENV_SECRETS=${VAULT_SCRUB_ENV_SECRETS:-unset})."
   fi
@@ -334,11 +352,16 @@ main() {
       set_env AUTHELIA_VAULT_OIDC_CLIENT_ID "${vault_oidc_client_id}"
     fi
 
-    vault_oidc_client_secret="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET)"
+    vault_oidc_client_secret="$(
+      vault_root "${root_token}" vault kv get -field=value kv/study-agents/authelia-vault-oidc-client-secret 2>/dev/null | tr -d '\r\n'
+    )"
+    if [[ -z "${vault_oidc_client_secret}" ]]; then
+      vault_oidc_client_secret="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET)"
+    fi
     if [[ -z "${vault_oidc_client_secret}" ]]; then
       vault_oidc_client_secret="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | cut -c1-24)"
-      set_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET "${vault_oidc_client_secret}"
     fi
+    vault_root "${root_token}" vault kv put kv/study-agents/authelia-vault-oidc-client-secret "value=${vault_oidc_client_secret}" >/dev/null
 
     vault_oidc_redirect="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI)"
     if [[ -z "${vault_oidc_redirect}" ]]; then

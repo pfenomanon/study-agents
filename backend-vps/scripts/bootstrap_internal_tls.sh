@@ -25,7 +25,7 @@ chmod 755 "${TLS_DIR}" || true
 get_env() {
   local key="$1"
   [[ -f "${ENV_FILE}" ]] || return 0
-  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_FILE}"
+  awk -F= -v key="${key}" '$1 == key {print substr($0, length(key) + 2); exit}' "${ENV_FILE}"
 }
 
 if [[ ! -s "${CA_KEY}" || ! -s "${CA_CERT}" ]]; then

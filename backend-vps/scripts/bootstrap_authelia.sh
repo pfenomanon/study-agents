@@ -38,7 +38,7 @@ bash "${ROOT_DIR}/scripts/bootstrap_internal_tls.sh"
 
 get_env() {
   local key="$1"
-  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_FILE}"
+  awk -F= -v key="${key}" '$1 == key {print substr($0, length(key) + 2); exit}' "${ENV_FILE}"
 }
 
 set_env() {
@@ -59,6 +59,153 @@ set_env() {
   mv "${tmp}" "${ENV_FILE}"
 }
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+COMPOSE_FILES=("${ROOT_DIR}/docker-compose.yml")
+if [[ -f "${ROOT_DIR}/docker-compose.zimaboard.yml" ]]; then
+  COMPOSE_FILES+=("${ROOT_DIR}/docker-compose.zimaboard.yml")
+fi
+
+dc() {
+  local args=()
+  local file
+  for file in "${COMPOSE_FILES[@]}"; do
+    args+=(-f "${file}")
+  done
+  docker compose "${args[@]}" "$@"
+}
+
+resolve_approle_file_path() {
+  local path_value="$1"
+  if [[ -z "${path_value}" || "${path_value}" == "/vault/bootstrap/role_id" ]]; then
+    echo "${ROOT_DIR}/docker/vault/runtime/role_id"
+    return
+  fi
+  if [[ "${path_value}" == "/vault/bootstrap/secret_id" ]]; then
+    echo "${ROOT_DIR}/docker/vault/runtime/secret_id"
+    return
+  fi
+  if [[ "${path_value}" = /* ]]; then
+    echo "${path_value}"
+    return
+  fi
+  echo "${ROOT_DIR}/${path_value}"
+}
+
+VAULT_APPROLE_TOKEN=""
+vault_access_ready=0
+vault_first_mode=0
+
+init_vault_access() {
+  local auth_method allow_plain role_id_file secret_id_file role_id secret_id
+  local token
+
+  auth_method="$(get_env VAULT_AUTH_METHOD)"
+  [[ -n "${auth_method}" ]] || auth_method="token"
+  allow_plain="$(get_env ALLOW_PLAINTEXT_ENV_SECRETS)"
+
+  if [[ "${auth_method}" == "approle" ]] && ! is_true "${allow_plain:-false}"; then
+    vault_first_mode=1
+  fi
+
+  [[ "${auth_method}" == "approle" ]] || return 0
+
+  role_id_file="$(resolve_approle_file_path "$(get_env VAULT_ROLE_ID_FILE)")"
+  secret_id_file="$(resolve_approle_file_path "$(get_env VAULT_SECRET_ID_FILE)")"
+  [[ -r "${role_id_file}" && -r "${secret_id_file}" ]] || return 0
+
+  if ! dc ps --status running --services 2>/dev/null | grep -qx vault; then
+    return 0
+  fi
+
+  role_id="$(head -n1 "${role_id_file}" | tr -d '\r\n')"
+  secret_id="$(head -n1 "${secret_id_file}" | tr -d '\r\n')"
+  [[ -n "${role_id}" && -n "${secret_id}" ]] || return 0
+
+  token="$(
+    dc exec -T vault env \
+      VAULT_ADDR="https://127.0.0.1:8200" \
+      VAULT_CACERT="/tls/vault-ca.pem" \
+      ROLE_ID="${role_id}" \
+      SECRET_ID="${secret_id}" \
+      sh -lc 'vault write -field=token auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID"' \
+      2>/dev/null | tr -d '\r\n'
+  )"
+  if [[ -n "${token}" ]]; then
+    VAULT_APPROLE_TOKEN="${token}"
+    vault_access_ready=1
+  fi
+}
+
+vault_kv_get_value() {
+  local path="$1"
+  [[ "${vault_access_ready}" -eq 1 ]] || return 1
+  dc exec -T vault env \
+    VAULT_ADDR="https://127.0.0.1:8200" \
+    VAULT_CACERT="/tls/vault-ca.pem" \
+    VAULT_TOKEN="${VAULT_APPROLE_TOKEN}" \
+    vault kv get -field=value "${path}" 2>/dev/null | tr -d '\r\n'
+}
+
+vault_kv_put_value() {
+  local path="$1"
+  local value="$2"
+  [[ "${vault_access_ready}" -eq 1 ]] || return 1
+  dc exec -T vault env \
+    VAULT_ADDR="https://127.0.0.1:8200" \
+    VAULT_CACERT="/tls/vault-ca.pem" \
+    VAULT_TOKEN="${VAULT_APPROLE_TOKEN}" \
+    vault kv put "${path}" "value=${value}" >/dev/null 2>&1
+}
+
+set_env_secret_if_allowed() {
+  local key="$1"
+  local value="$2"
+  if [[ -z "$(get_env "${key}")" ]] && { [[ "${vault_first_mode}" -eq 0 ]] || [[ "${vault_access_ready}" -eq 0 ]]; }; then
+    set_env "${key}" "${value}"
+  fi
+}
+
+resolve_secret_with_vault() {
+  local env_key="$1"
+  local vault_path="$2"
+  local generator="${3:-}"
+  local value
+
+  value="$(vault_kv_get_value "${vault_path}" || true)"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return 0
+  fi
+
+  value="$(get_env "${env_key}")"
+  if [[ -z "${value}" ]]; then
+    case "${generator}" in
+      rand_hex_32)
+        value="$(rand_hex 32)"
+        ;;
+      rand_password)
+        value="$(rand_password)"
+        ;;
+      default_gateway_admin)
+        value="gateway-admin"
+        ;;
+    esac
+  fi
+
+  if [[ -n "${value}" ]]; then
+    vault_kv_put_value "${vault_path}" "${value}" || true
+    set_env_secret_if_allowed "${env_key}" "${value}"
+  fi
+
+  printf '%s' "${value}"
+}
+
 rand_hex() {
   local bytes="$1"
   openssl rand -hex "${bytes}"
@@ -72,6 +219,8 @@ users_file_has_entries() {
   [[ -f "${AUTHELIA_USERS}" ]] || return 1
   grep -Eq '^  [A-Za-z0-9._@-]+:' "${AUTHELIA_USERS}"
 }
+
+init_vault_access
 
 PUBLIC_DOMAIN="$(get_env PUBLIC_DOMAIN)"
 if [[ -z "${PUBLIC_DOMAIN}" ]]; then
@@ -90,31 +239,12 @@ if [[ "${AUTHELIA_USERS_SOURCE}" != "file" && "${AUTHELIA_USERS_SOURCE}" != "env
   exit 1
 fi
 
-AUTHELIA_AUTH_USERNAME="$(get_env AUTHELIA_AUTH_USERNAME)"
-if [[ -z "${AUTHELIA_AUTH_USERNAME}" ]]; then
-  AUTHELIA_AUTH_USERNAME="gateway-admin"
-  set_env AUTHELIA_AUTH_USERNAME "${AUTHELIA_AUTH_USERNAME}"
-fi
+AUTHELIA_AUTH_USERNAME="$(resolve_secret_with_vault AUTHELIA_AUTH_USERNAME kv/study-agents/authelia-auth-username default_gateway_admin)"
+AUTHELIA_AUTH_PASSWORD="$(resolve_secret_with_vault AUTHELIA_AUTH_PASSWORD kv/study-agents/authelia-auth-password)"
 
-AUTHELIA_AUTH_PASSWORD="$(get_env AUTHELIA_AUTH_PASSWORD)"
-
-AUTHELIA_SESSION_SECRET="$(get_env AUTHELIA_SESSION_SECRET)"
-if [[ -z "${AUTHELIA_SESSION_SECRET}" ]]; then
-  AUTHELIA_SESSION_SECRET="$(rand_hex 32)"
-  set_env AUTHELIA_SESSION_SECRET "${AUTHELIA_SESSION_SECRET}"
-fi
-
-AUTHELIA_STORAGE_ENCRYPTION_KEY="$(get_env AUTHELIA_STORAGE_ENCRYPTION_KEY)"
-if [[ -z "${AUTHELIA_STORAGE_ENCRYPTION_KEY}" ]]; then
-  AUTHELIA_STORAGE_ENCRYPTION_KEY="$(rand_hex 32)"
-  set_env AUTHELIA_STORAGE_ENCRYPTION_KEY "${AUTHELIA_STORAGE_ENCRYPTION_KEY}"
-fi
-
-AUTHELIA_JWT_SECRET="$(get_env AUTHELIA_JWT_SECRET)"
-if [[ -z "${AUTHELIA_JWT_SECRET}" ]]; then
-  AUTHELIA_JWT_SECRET="$(rand_hex 32)"
-  set_env AUTHELIA_JWT_SECRET "${AUTHELIA_JWT_SECRET}"
-fi
+AUTHELIA_SESSION_SECRET="$(resolve_secret_with_vault AUTHELIA_SESSION_SECRET kv/study-agents/authelia-session-secret rand_hex_32)"
+AUTHELIA_STORAGE_ENCRYPTION_KEY="$(resolve_secret_with_vault AUTHELIA_STORAGE_ENCRYPTION_KEY kv/study-agents/authelia-storage-encryption-key rand_hex_32)"
+AUTHELIA_JWT_SECRET="$(resolve_secret_with_vault AUTHELIA_JWT_SECRET kv/study-agents/authelia-jwt-secret rand_hex_32)"
 
 AUTHELIA_POLICY="$(get_env AUTHELIA_POLICY)"
 if [[ -z "${AUTHELIA_POLICY}" ]]; then
@@ -146,11 +276,7 @@ if [[ -z "${AUTHELIA_SESSION_REMEMBER_ME}" ]]; then
   set_env AUTHELIA_SESSION_REMEMBER_ME "${AUTHELIA_SESSION_REMEMBER_ME}"
 fi
 
-AUTHELIA_OIDC_HMAC_SECRET="$(get_env AUTHELIA_OIDC_HMAC_SECRET)"
-if [[ -z "${AUTHELIA_OIDC_HMAC_SECRET}" ]]; then
-  AUTHELIA_OIDC_HMAC_SECRET="$(rand_hex 32)"
-  set_env AUTHELIA_OIDC_HMAC_SECRET "${AUTHELIA_OIDC_HMAC_SECRET}"
-fi
+AUTHELIA_OIDC_HMAC_SECRET="$(resolve_secret_with_vault AUTHELIA_OIDC_HMAC_SECRET kv/study-agents/authelia-oidc-hmac-secret rand_hex_32)"
 
 AUTHELIA_OIDC_CLIENT_ID="$(get_env AUTHELIA_OIDC_CLIENT_ID)"
 if [[ -z "${AUTHELIA_OIDC_CLIENT_ID}" ]]; then
@@ -158,11 +284,7 @@ if [[ -z "${AUTHELIA_OIDC_CLIENT_ID}" ]]; then
   set_env AUTHELIA_OIDC_CLIENT_ID "${AUTHELIA_OIDC_CLIENT_ID}"
 fi
 
-AUTHELIA_OIDC_CLIENT_SECRET="$(get_env AUTHELIA_OIDC_CLIENT_SECRET)"
-if [[ -z "${AUTHELIA_OIDC_CLIENT_SECRET}" ]]; then
-  AUTHELIA_OIDC_CLIENT_SECRET="$(rand_password)"
-  set_env AUTHELIA_OIDC_CLIENT_SECRET "${AUTHELIA_OIDC_CLIENT_SECRET}"
-fi
+AUTHELIA_OIDC_CLIENT_SECRET="$(resolve_secret_with_vault AUTHELIA_OIDC_CLIENT_SECRET kv/study-agents/authelia-oidc-client-secret rand_password)"
 
 AUTHELIA_OIDC_CLIENT_REDIRECT_URI="$(get_env AUTHELIA_OIDC_CLIENT_REDIRECT_URI)"
 if [[ -z "${AUTHELIA_OIDC_CLIENT_REDIRECT_URI}" ]]; then
@@ -176,11 +298,7 @@ if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_ID}" ]]; then
   set_env AUTHELIA_VAULT_OIDC_CLIENT_ID "${AUTHELIA_VAULT_OIDC_CLIENT_ID}"
 fi
 
-AUTHELIA_VAULT_OIDC_CLIENT_SECRET="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET)"
-if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_SECRET}" ]]; then
-  AUTHELIA_VAULT_OIDC_CLIENT_SECRET="$(rand_password)"
-  set_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET "${AUTHELIA_VAULT_OIDC_CLIENT_SECRET}"
-fi
+AUTHELIA_VAULT_OIDC_CLIENT_SECRET="$(resolve_secret_with_vault AUTHELIA_VAULT_OIDC_CLIENT_SECRET kv/study-agents/authelia-vault-oidc-client-secret rand_password)"
 
 AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI)"
 if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI}" ]]; then
@@ -202,7 +320,8 @@ fi
 if [[ "${AUTHELIA_USERS_SOURCE}" == "env" ]]; then
   if [[ -z "${AUTHELIA_AUTH_PASSWORD}" ]]; then
     AUTHELIA_AUTH_PASSWORD="$(rand_password)"
-    set_env AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
+    vault_kv_put_value kv/study-agents/authelia-auth-password "${AUTHELIA_AUTH_PASSWORD}" || true
+    set_env_secret_if_allowed AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
   fi
 
   AUTHELIA_AUTH_PASSWORD_HASH="$(
@@ -229,7 +348,8 @@ EOF_USERS
 elif ! users_file_has_entries; then
   if [[ -z "${AUTHELIA_AUTH_PASSWORD}" ]]; then
     AUTHELIA_AUTH_PASSWORD="$(rand_password)"
-    set_env AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
+    vault_kv_put_value kv/study-agents/authelia-auth-password "${AUTHELIA_AUTH_PASSWORD}" || true
+    set_env_secret_if_allowed AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
   fi
 
   AUTHELIA_AUTH_PASSWORD_HASH="$(

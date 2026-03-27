@@ -18,7 +18,7 @@ die() {
 
 env_value() {
   local key="$1"
-  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_FILE}" 2>/dev/null || true
+  awk -F= -v key="${key}" '$1 == key {print substr($0, length(key) + 2); exit}' "${ENV_FILE}" 2>/dev/null || true
 }
 
 check_http_code() {

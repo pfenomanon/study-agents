@@ -72,7 +72,7 @@ sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_
 ```
 
 This now enforces Vault-first runtime by default:
-- synced runtime secrets are scrubbed from `.env`
+- synced runtime/Ollama/Authelia secrets are scrubbed from `.env`
 - pre-scrub backup is written under `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`
 - plaintext env fallback is disabled unless `ALLOW_PLAINTEXT_ENV_SECRETS=true`
 

@@ -98,7 +98,7 @@ upsert_env_key() {
   if grep -q "^${key}=" "${file}"; then
     if [[ "${OVERWRITE}" -eq 0 ]]; then
       local current
-      current="$(awk -F= -v k="${key}" '$1 == k {print substr($0, index($0, $2)); exit}' "${file}")"
+      current="$(awk -F= -v k="${key}" '$1 == k {print substr($0, length(k) + 2); exit}' "${file}")"
       if [[ -n "${current}" ]]; then
         echo "skip ${key}: existing non-empty value (use --overwrite to replace)"
         return 0

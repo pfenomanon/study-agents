@@ -26,7 +26,7 @@ require_cmd() {
 
 env_value() {
   local key="$1"
-  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_FILE}" 2>/dev/null || true
+  awk -F= -v key="${key}" '$1 == key {print substr($0, length(key) + 2); exit}' "${ENV_FILE}" 2>/dev/null || true
 }
 
 is_placeholder_value() {
@@ -249,7 +249,7 @@ main() {
   # Validate that runtime containers can execute AppRole flow and hydrate required envs.
   if docker compose ps --status running --services | grep -qx utility-service; then
     log "Validating in-container runtime secret hydration via use_env.sh..."
-    if ! docker compose exec -T utility-service /bin/sh -lc 'rm -f /env/.vault_token.json /env/.env.runtime && /app/use_env.sh /bin/sh -lc "test -n \"$OPENAI_API_KEY\" && test -n \"$SUPABASE_URL\" && test -n \"$SUPABASE_KEY\""'; then
+    if ! docker compose exec -T utility-service /bin/sh -lc 'rm -f /env/.vault_token.json /env/.env.runtime && /app/use_env.sh /bin/sh -lc "test -n \"\$OPENAI_API_KEY\" && test -n \"\$SUPABASE_URL\" && test -n \"\$SUPABASE_KEY\""'; then
       die "Container runtime secret hydration failed (utility-service/use_env.sh)"
     fi
     log "Container runtime secret hydration succeeded."

@@ -183,8 +183,8 @@ This action:
 - Creates `study-agents-runtime` read policy + AppRole credentials in `docker/vault/runtime/{role_id,secret_id}`
 - Configures Vault OIDC auth using your existing Authelia IdP/gateway flow for Vault UI admin login
 - Recreates auth gateway services and validates required Vault UI/OIDC popup routes
-- Syncs non-placeholder `.env` secrets into `kv/study-agents/*`
-- Scrubs synced runtime secrets from `.env` for Vault-first runtime (backup saved to `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`)
+- Syncs non-placeholder `.env` secrets into `kv/study-agents/*` (runtime, OLLAMA, and Authelia secret material)
+- Scrubs synced plaintext runtime/Ollama/Authelia secret values from `.env` for Vault-first runtime (backup saved to `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`)
 - Recreates runtime services to consume Vault via AppRole (`VAULT_AUTH_METHOD=approle`)
 
 Vault UI OIDC sign-in fields:

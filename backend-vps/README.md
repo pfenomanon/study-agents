@@ -300,7 +300,7 @@ Press `Ctrl+C` to stop every managed process gracefully.
   ```bash
   bash scripts/install_backend_vps.sh bootstrap-vault-nondev
   ```
-  This provisions persistent Vault storage (`raft`), enables service AppRole auth, configures Vault UI OIDC admin login via your Authelia IdP flow, validates required gateway OIDC routes, scrubs synced runtime secrets from `.env`, and injects runtime secrets through `scripts/use_env.sh` using short-lived Vault tokens.
+  This provisions persistent Vault storage (`raft`), enables service AppRole auth, configures Vault UI OIDC admin login via your Authelia IdP flow, validates required gateway OIDC routes, syncs/scrubs runtime + OLLAMA + Authelia secret values from `.env`, and injects runtime secrets through `scripts/use_env.sh` using short-lived Vault tokens.
 - Re-run/standalone gateway OIDC route validation:
   ```bash
   bash scripts/install_backend_vps.sh validate-gateway-oidc <public-domain-or-ip>

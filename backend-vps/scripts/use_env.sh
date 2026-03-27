@@ -17,7 +17,7 @@ is_true() {
 runtime_get() {
   local key="$1"
   [[ -f "${ENV_OUT}" ]] || return 0
-  awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' "${ENV_OUT}" 2>/dev/null || true
+  awk -F= -v key="${key}" '$1 == key {print substr($0, length(key) + 2); exit}' "${ENV_OUT}" 2>/dev/null || true
 }
 
 json_get() {
@@ -255,6 +255,7 @@ if [[ "${auth_method}" == "approle" ]] && approle_material_ready && ! is_true "$
 fi
 
 plain_OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+plain_OLLAMA_API_KEY="${OLLAMA_API_KEY:-}"
 plain_SUPABASE_URL="${SUPABASE_URL:-}"
 plain_SUPABASE_KEY="${SUPABASE_KEY:-}"
 plain_API_TOKEN="${API_TOKEN:-}"
@@ -265,11 +266,12 @@ plain_SCENARIO_SUPABASE_URL="${SCENARIO_SUPABASE_URL:-}"
 plain_SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-}"
 
 if (( vault_first_mode == 1 )); then
-  unset OPENAI_API_KEY SUPABASE_URL SUPABASE_KEY API_TOKEN COPILOT_API_KEY RAG_API_TOKEN SCENARIO_API_KEY SCENARIO_SUPABASE_URL SCENARIO_SUPABASE_KEY || true
+  unset OPENAI_API_KEY OLLAMA_API_KEY SUPABASE_URL SUPABASE_KEY API_TOKEN COPILOT_API_KEY RAG_API_TOKEN SCENARIO_API_KEY SCENARIO_SUPABASE_URL SCENARIO_SUPABASE_KEY || true
 fi
 
 # Seed from previous successful runtime fetch to keep services available if Vault is transiently unavailable.
 OPENAI_API_KEY="${OPENAI_API_KEY:-$(runtime_get OPENAI_API_KEY)}"
+OLLAMA_API_KEY="${OLLAMA_API_KEY:-$(runtime_get OLLAMA_API_KEY)}"
 SUPABASE_URL="${SUPABASE_URL:-$(runtime_get SUPABASE_URL)}"
 SUPABASE_KEY="${SUPABASE_KEY:-$(runtime_get SUPABASE_KEY)}"
 API_TOKEN="${API_TOKEN:-$(runtime_get API_TOKEN)}"
@@ -282,6 +284,7 @@ SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-$(runtime_get SCENARIO_SUPABASE_
 vault_login_approle || true
 
 OPENAI_API_KEY="${OPENAI_API_KEY:-$(fetch_secret_value kv/data/study-agents/openai)}"
+OLLAMA_API_KEY="${OLLAMA_API_KEY:-$(fetch_secret_value kv/data/study-agents/ollama-api-key)}"
 SUPABASE_URL="${SUPABASE_URL:-$(fetch_secret_value kv/data/study-agents/supabase-url)}"
 SUPABASE_KEY="${SUPABASE_KEY:-$(fetch_secret_value kv/data/study-agents/supabase-key)}"
 API_TOKEN="${API_TOKEN:-$(fetch_secret_value kv/data/study-agents/api-token)}"
@@ -294,6 +297,7 @@ SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-$(fetch_secret_value kv/data/stu
 # Compatibility mode: when AppRole is not bootstrapped, allow plaintext env fallback.
 if (( vault_first_mode == 0 )); then
   OPENAI_API_KEY="${OPENAI_API_KEY:-${plain_OPENAI_API_KEY}}"
+  OLLAMA_API_KEY="${OLLAMA_API_KEY:-${plain_OLLAMA_API_KEY}}"
   SUPABASE_URL="${SUPABASE_URL:-${plain_SUPABASE_URL}}"
   SUPABASE_KEY="${SUPABASE_KEY:-${plain_SUPABASE_KEY}}"
   API_TOKEN="${API_TOKEN:-${plain_API_TOKEN}}"
@@ -307,6 +311,7 @@ fi
 umask 077
 cat > "${ENV_OUT}" <<EOF_ENV
 OPENAI_API_KEY=${OPENAI_API_KEY}
+OLLAMA_API_KEY=${OLLAMA_API_KEY}
 SUPABASE_URL=${SUPABASE_URL}
 SUPABASE_KEY=${SUPABASE_KEY}
 API_TOKEN=${API_TOKEN}

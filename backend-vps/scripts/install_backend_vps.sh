@@ -91,7 +91,7 @@ ensure_pkg() {
 get_env() {
   local key="$1"
   [[ -f .env ]] || return 0
-  awk -F= -v key="$key" '$1 == key {print substr($0, index($0, $2)); exit}' .env
+  awk -F= -v key="$key" '$1 == key {print substr($0, length(key) + 2); exit}' .env
 }
 
 set_env() {
@@ -350,7 +350,7 @@ resolve_supabase_db_url() {
   status_env="$(supabase status -o env 2>/dev/null || supabase status --env 2>/dev/null || true)"
   candidate="$(
     printf '%s\n' "$status_env" \
-      | awk -F= '/^(SUPABASE_DB_URL|DB_URL|POSTGRES_URL|POSTGRES_CONNECTION_STRING)=/ {print substr($0, index($0, $2)); exit}'
+      | awk -F= '/^(SUPABASE_DB_URL|DB_URL|POSTGRES_URL|POSTGRES_CONNECTION_STRING)=/ {sub(/^[^=]*=/, ""); print; exit}'
   )"
   if [[ -n "$candidate" ]]; then
     printf '%s' "$candidate"

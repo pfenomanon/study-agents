@@ -14,7 +14,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-backend-vps-<timestamp>.tar.gz`
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
-- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `deploy`, `start-local-all`, `apply-schema`, `restart`, `validate`, `status`, `logs`, `stop`).
+- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `deploy`, `start-local-all`, `bootstrap-vault-nondev`, `configure-lan-https`, `validate-gateway-oidc`, `export-caddy-ca`, `reclaim-disk`, `apply-schema`, `restart`, `validate`, `status`, `logs`, `stop`).
 - `scripts/validate_backend_stack.sh`: waits for required containers and runs HTTP smoke checks for CAG/RAG/Copilot/frontend endpoints.
 - `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
 - `scripts/generate_local_api_keys.sh`: generates local service auth tokens (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`) with compatible entropy/format.
@@ -300,7 +300,15 @@ Press `Ctrl+C` to stop every managed process gracefully.
   ```bash
   bash scripts/install_backend_vps.sh bootstrap-vault-nondev
   ```
-  This provisions persistent Vault storage (`raft`), enables service AppRole auth, configures Vault UI OIDC admin login via your Authelia IdP flow, and injects runtime secrets through `scripts/use_env.sh` using short-lived Vault tokens.
+  This provisions persistent Vault storage (`raft`), enables service AppRole auth, configures Vault UI OIDC admin login via your Authelia IdP flow, validates required gateway OIDC routes, and injects runtime secrets through `scripts/use_env.sh` using short-lived Vault tokens.
+- Re-run/standalone gateway OIDC route validation:
+  ```bash
+  bash scripts/install_backend_vps.sh validate-gateway-oidc <public-domain-or-ip>
+  ```
+- Vault UI OIDC sign-in fields:
+  - Method: `OIDC`
+  - Role: `vault-admin`
+  - Mount path: `oidc`
 
 ## Testing
 

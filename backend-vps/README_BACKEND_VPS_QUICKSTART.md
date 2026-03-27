@@ -98,10 +98,21 @@ Equivalent wrapper action:
 bash scripts/install_backend_vps.sh configure-lan-https 10.72.72.161 10.72.72.0/24
 ```
 
+Validate Vault UI + OIDC popup routes explicitly:
+
+```bash
+bash scripts/install_backend_vps.sh validate-gateway-oidc 10.72.72.161
+```
+
 Open:
 - `https://10.72.72.161/`
 
 Note: this is gateway HTTPS. Do not use `https://<ip>:3000`.
+
+Vault UI OIDC sign-in fields:
+- Method: `OIDC`
+- Role: `vault-admin`
+- Mount path: `oidc`
 
 ## 10) Trust the local gateway CA cert on client devices
 

@@ -34,6 +34,13 @@ die() {
   exit 1
 }
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
@@ -303,6 +310,13 @@ main() {
     log "Exporting Caddy local root CA for Vault OIDC discovery trust..."
     bash "${ROOT_DIR}/scripts/export_caddy_root_ca.sh" "${CADDY_ROOT_CA}"
 
+    if is_true "${GATEWAY_ROUTE_VALIDATE:-true}"; then
+      log "Validating gateway Vault/OIDC popup routes..."
+      bash "${ROOT_DIR}/scripts/validate_gateway_oidc_routes.sh" "${public_domain}"
+    else
+      log "Skipping gateway route validation (GATEWAY_ROUTE_VALIDATE=${GATEWAY_ROUTE_VALIDATE:-unset})."
+    fi
+
     if ! vault_root "${root_token}" vault auth list -format=json | jq -e 'has("oidc/")' >/dev/null; then
       vault_root "${root_token}" vault auth enable oidc >/dev/null
     fi
@@ -339,6 +353,8 @@ main() {
   echo "  VAULT_AUTH_METHOD in .env: $(get_env VAULT_AUTH_METHOD)"
   if [[ -n "${public_domain}" ]]; then
     echo "  Vault UI OIDC login: https://${public_domain}/ui/"
+    echo "  Vault UI OIDC fields: Method=OIDC, Role=vault-admin, Mount path=oidc"
+    echo "  Route recheck: bash scripts/validate_gateway_oidc_routes.sh ${public_domain}"
   fi
 }
 

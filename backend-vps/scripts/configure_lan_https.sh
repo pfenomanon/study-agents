@@ -24,6 +24,13 @@ if [[ -z "$ALLOW_CIDR" ]]; then
   ALLOW_CIDR="127.0.0.1/32"
 fi
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 upsert_env() {
   local key="$1"
   local value="$2"
@@ -52,6 +59,13 @@ else
   sudo docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --force-recreate authelia tls-gateway
 fi
 
+if is_true "${GATEWAY_ROUTE_VALIDATE:-true}"; then
+  bash scripts/validate_gateway_oidc_routes.sh "${PUBLIC_DOMAIN}"
+else
+  echo "Skipping gateway route validation (GATEWAY_ROUTE_VALIDATE=${GATEWAY_ROUTE_VALIDATE:-unset})."
+fi
+
 echo "LAN HTTPS configured for: https://${PUBLIC_DOMAIN}/"
 echo "Allowlist CIDRs: 127.0.0.1/32 ::1/128 ${ALLOW_CIDR}"
 echo "Next: export CA cert with 'bash scripts/export_caddy_root_ca.sh' and trust it on client devices."
+echo "Vault UI login fields: Method=OIDC, Role=vault-admin, Mount path=oidc"

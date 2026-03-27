@@ -23,6 +23,7 @@ Then run LAN HTTPS setup:
 
 ```bash
 bash scripts/install_backend_vps.sh configure-lan-https 10.72.72.161 10.72.72.0/24
+bash scripts/install_backend_vps.sh validate-gateway-oidc 10.72.72.161
 bash scripts/install_backend_vps.sh export-caddy-ca
 ```
 
@@ -115,6 +116,12 @@ Use this after backend is running.
 bash scripts/configure_lan_https.sh 10.72.72.161 10.72.72.0/24
 ```
 
+Validate Vault UI + OIDC popup routes:
+
+```bash
+bash scripts/install_backend_vps.sh validate-gateway-oidc 10.72.72.161
+```
+
 What it updates:
 - `PUBLIC_DOMAIN`
 - `AUTHELIA_OIDC_CLIENT_REDIRECT_URI`
@@ -123,6 +130,11 @@ What it updates:
 
 Open from LAN clients:
 - `https://10.72.72.161/`
+
+Vault UI OIDC sign-in fields:
+- Method: `OIDC`
+- Role: `vault-admin`
+- Mount path: `oidc`
 
 ## 3) Export and trust Caddy local CA
 

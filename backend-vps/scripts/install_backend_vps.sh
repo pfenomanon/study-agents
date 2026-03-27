@@ -9,6 +9,7 @@ set -euo pipefail
 #   bash scripts/install_backend_vps.sh start-local-all
 #   bash scripts/install_backend_vps.sh bootstrap-vault-nondev
 #   bash scripts/install_backend_vps.sh configure-lan-https <public-domain-or-ip> [allow-cidr]
+#   bash scripts/install_backend_vps.sh validate-gateway-oidc [public-domain-or-ip]
 #   bash scripts/install_backend_vps.sh export-caddy-ca [output-path]
 #   bash scripts/install_backend_vps.sh reclaim-disk
 #   bash scripts/install_backend_vps.sh validate
@@ -25,7 +26,7 @@ cd "$ROOT_DIR"
 
 if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
   cat <<'EOF'
-Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|bootstrap-vault-nondev|configure-lan-https|export-caddy-ca|reclaim-disk|apply-schema|restart|validate|status|logs|stop]
+Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|bootstrap-vault-nondev|configure-lan-https|validate-gateway-oidc|export-caddy-ca|reclaim-disk|apply-schema|restart|validate|status|logs|stop]
 
 Actions:
   deps             Install host dependencies and create .env if missing
@@ -36,6 +37,8 @@ Actions:
                    Configure persistent Vault + AppRole + OIDC admin flow (non-dev mode)
   configure-lan-https <public-domain-or-ip> [allow-cidr]
                    Configure HTTPS gateway for LAN usage, bootstrap Authelia, recreate gateway/auth
+  validate-gateway-oidc [public-domain-or-ip]
+                   Validate Vault UI + Authelia OIDC popup routes at gateway
   export-caddy-ca [output-path]
                    Export Caddy local root CA certificate for client trust import
   reclaim-disk     Reclaim host disk space (docker build cache/images + apt/journal cleanup)
@@ -521,6 +524,10 @@ case "$ACTION" in
   configure-lan-https)
     install_deps
     run_repo_script_with_docker_access scripts/configure_lan_https.sh "$ARG1" "$ARG2"
+    ;;
+  validate-gateway-oidc)
+    install_deps
+    run_repo_script_with_docker_access scripts/validate_gateway_oidc_routes.sh "$ARG1"
     ;;
   export-caddy-ca)
     install_deps

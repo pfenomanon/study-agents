@@ -81,12 +81,16 @@ For full hop-by-hop encryption (client -> gateway -> service -> data dependencie
    ```bash
    bash scripts/bootstrap_authelia.sh
    ```
-3. Keep these set in `.env`:
+3. Validate Vault/OIDC gateway routes after auth/gateway bootstrap:
+   ```bash
+   bash scripts/validate_gateway_oidc_routes.sh <public-domain-or-ip>
+   ```
+4. Keep these set in `.env`:
    - `PUBLIC_DOMAIN`, `ACME_EMAIL`
    - `VAULT_ADDR_INTERNAL=https://vault:8200`
    - `VAULT_CACERT_INTERNAL=/tls/vault-ca.pem`
-4. Do not expose direct service ports externally (`3000`, `8000`, `8100`, `9010`, `8200`). Expose only `443`.
-5. Export and trust the local gateway CA on client devices when using local/internal PKI:
+5. Do not expose direct service ports externally (`3000`, `8000`, `8100`, `9010`, `8200`). Expose only `443`.
+6. Export and trust the local gateway CA on client devices when using local/internal PKI:
    ```bash
    bash scripts/export_caddy_root_ca.sh
    ```
@@ -177,8 +181,19 @@ This action:
 - Initializes/unseals Vault and writes init material to `docker/vault/bootstrap/init.json`
 - Creates `study-agents-runtime` read policy + AppRole credentials in `docker/vault/runtime/{role_id,secret_id}`
 - Configures Vault OIDC auth using your existing Authelia IdP/gateway flow for Vault UI admin login
+- Recreates auth gateway services and validates required Vault UI/OIDC popup routes
 - Syncs non-placeholder `.env` secrets into `kv/study-agents/*`
 - Recreates runtime services to consume Vault via AppRole (`VAULT_AUTH_METHOD=approle`)
+
+Vault UI OIDC sign-in fields:
+- Method: `OIDC`
+- Role: `vault-admin`
+- Mount path: `oidc`
+
+If Vault login popup is blank/404 or fails to complete:
+```bash
+bash scripts/install_backend_vps.sh validate-gateway-oidc <public-domain-or-ip>
+```
 
 ## Run Natively (venv)
 ```bash

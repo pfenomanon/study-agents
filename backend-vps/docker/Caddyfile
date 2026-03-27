@@ -46,6 +46,28 @@
                 reverse_proxy authelia:9091
             }
 
+            # Route Vault UI and API directly to Vault.
+            # Vault UI handles its own OIDC login flow against Authelia.
+            @vault_ui path /ui*
+            handle @vault_ui {
+                reverse_proxy https://vault:8200 {
+                    transport http {
+                        tls_server_name vault
+                        tls_insecure_skip_verify
+                    }
+                }
+            }
+
+            @vault_api path /v1*
+            handle @vault_api {
+                reverse_proxy https://vault:8200 {
+                    transport http {
+                        tls_server_name vault
+                        tls_insecure_skip_verify
+                    }
+                }
+            }
+
             # CAG API endpoints are protected via API_TOKEN at the application layer.
             # Bypass interactive Authelia redirects so CLI clients receive JSON responses.
             @cag path /cag-answer /cag-ocr-answer /capture-session*
@@ -56,7 +78,7 @@
             # Authelia enforces MFA and login regulation.
             # Regulation is configured with 3 failures -> 20 minute source cooldown.
             @protected {
-                not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /cag-answer /cag-ocr-answer /capture-session*
+                not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /cag-answer /cag-ocr-answer /capture-session* /ui* /v1*
             }
             forward_auth @protected authelia:9091 {
                 uri /api/authz/forward-auth

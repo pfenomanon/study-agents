@@ -41,7 +41,7 @@
             }
 
             # OIDC endpoints must be reachable without an existing app session.
-            @authelia_oidc path /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/*
+            @authelia_oidc path /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /oauth2/* /consent/*
             handle @authelia_oidc {
                 reverse_proxy authelia:9091
             }
@@ -78,7 +78,7 @@
             # Authelia enforces MFA and login regulation.
             # Regulation is configured with 3 failures -> 20 minute source cooldown.
             @protected {
-                not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /cag-answer /cag-ocr-answer /capture-session* /ui* /v1*
+                not path /authelia* /.well-known/openid-configuration /.well-known/oauth-authorization-server /jwks.json /api/oidc/* /oauth2/* /consent/* /cag-answer /cag-ocr-answer /capture-session* /ui* /v1*
             }
             forward_auth @protected authelia:9091 {
                 uri /api/authz/forward-auth

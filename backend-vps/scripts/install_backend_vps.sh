@@ -7,7 +7,7 @@ set -euo pipefail
 #   bash scripts/install_backend_vps.sh start
 #   bash scripts/install_backend_vps.sh deploy
 #   bash scripts/install_backend_vps.sh start-local-all
-#   bash scripts/install_backend_vps.sh bootstrap-internal-tls
+#   bash scripts/install_backend_vps.sh bootstrap-vault-nondev
 #   bash scripts/install_backend_vps.sh configure-lan-https <public-domain-or-ip> [allow-cidr]
 #   bash scripts/install_backend_vps.sh export-caddy-ca [output-path]
 #   bash scripts/install_backend_vps.sh reclaim-disk
@@ -25,19 +25,19 @@ cd "$ROOT_DIR"
 
 if [[ "$ACTION" == "-h" || "$ACTION" == "--help" ]]; then
   cat <<'EOF'
-Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|bootstrap-internal-tls|configure-lan-https|export-caddy-ca|reclaim-disk|apply-schema|restart|validate|status|logs|stop]
+Usage: bash scripts/install_backend_vps.sh [deps|start|deploy|start-local-all|bootstrap-vault-nondev|configure-lan-https|export-caddy-ca|reclaim-disk|apply-schema|restart|validate|status|logs|stop]
 
 Actions:
   deps             Install host dependencies and create .env if missing
   start            Validate env + run docker compose up -d --build
   deploy           deps + start + backend validation checks (recommended)
   start-local-all  Install deps + start local Supabase + apply schema + start backend stack
-  bootstrap-internal-tls
-                   Generate private CA + per-service TLS certs used for encrypted internal hops
+  bootstrap-vault-nondev
+                   Configure persistent Vault + AppRole + OIDC admin flow (non-dev mode)
   configure-lan-https <public-domain-or-ip> [allow-cidr]
                    Configure HTTPS gateway for LAN usage, bootstrap Authelia, recreate gateway/auth
   export-caddy-ca [output-path]
-                   Export Caddy local root/intermediate certificates (+ chain bundle) and print trust commands
+                   Export Caddy local root CA certificate for client trust import
   reclaim-disk     Reclaim host disk space (docker build cache/images + apt/journal cleanup)
   apply-schema     Apply supabase_schema.sql using SUPABASE_DB_URL (or detected local DB URL)
   restart          Restart stack
@@ -178,6 +178,7 @@ install_deps() {
   ensure_pkg postgresql-client
   ensure_pkg jq
   ensure_pkg python3
+  ensure_pkg python3-yaml
   ensure_pkg python3-venv
   ensure_pkg unzip
 
@@ -409,13 +410,6 @@ validate_runtime_env() {
   ensure_required_tokens
 }
 
-bootstrap_internal_tls() {
-  local bootstrap_script="${SCRIPT_DIR}/bootstrap_internal_tls.sh"
-  [[ -f "${bootstrap_script}" ]] || die "Missing internal TLS bootstrap script: ${bootstrap_script}"
-  chmod +x "${bootstrap_script}"
-  run_repo_script_with_docker_access "${bootstrap_script}"
-}
-
 run_stack_validation() {
   local validator="${SCRIPT_DIR}/validate_backend_stack.sh"
   if [[ ! -f "$validator" ]]; then
@@ -495,7 +489,6 @@ case "$ACTION" in
     ;;
   start)
     install_deps
-    bootstrap_internal_tls
     validate_runtime_env
     log "Starting backend stack..."
     dc up -d --build
@@ -503,7 +496,6 @@ case "$ACTION" in
     ;;
   deploy)
     install_deps
-    bootstrap_internal_tls
     validate_runtime_env
     log "Deploying backend stack..."
     dc up -d --build
@@ -513,7 +505,6 @@ case "$ACTION" in
   start-local-all)
     install_deps
     install_supabase_cli
-    bootstrap_internal_tls
     log "Starting local Supabase..."
     run_repo_script_with_docker_access scripts/setup_local_supabase.sh
     validate_runtime_env
@@ -523,13 +514,12 @@ case "$ACTION" in
     dc ps
     run_stack_validation
     ;;
-  bootstrap-internal-tls)
+  bootstrap-vault-nondev)
     install_deps
-    bootstrap_internal_tls
+    run_repo_script_with_docker_access scripts/bootstrap_vault_nondev.sh
     ;;
   configure-lan-https)
     install_deps
-    bootstrap_internal_tls
     run_repo_script_with_docker_access scripts/configure_lan_https.sh "$ARG1" "$ARG2"
     ;;
   export-caddy-ca)
@@ -549,7 +539,6 @@ case "$ACTION" in
     ;;
   restart)
     install_deps
-    bootstrap_internal_tls
     validate_runtime_env
     log "Restarting backend stack..."
     dc down
@@ -559,7 +548,6 @@ case "$ACTION" in
     ;;
   validate)
     ensure_env_file
-    bootstrap_internal_tls
     validate_runtime_env
     run_stack_validation
     ;;

@@ -106,9 +106,13 @@ extract_status_value() {
   printf '%s\n' "$status_env" | awk -F= -v key="$key" '$1 == key {print $2; exit}' | tr -d '"'
 }
 
+extract_url_scheme() {
+  local url="$1"
+  printf '%s' "$url" | sed -E 's#^([a-zA-Z][a-zA-Z0-9+.-]*):.*#\1#'
+}
+
 install_supabase_cli
 ensure_supabase_project
-bash scripts/bootstrap_internal_tls.sh
 start_supabase
 
 STATUS_ENV="$(supabase status -o env 2>/dev/null || supabase status --env 2>/dev/null || true)"
@@ -139,11 +143,47 @@ if [[ ! "$SUPA_API_PORT" =~ ^[0-9]+$ ]]; then
   SUPA_API_PORT="54321"
 fi
 
-SUPA_CONTAINER_URL="https://host.docker.internal:${SUPA_API_PORT}"
+SUPA_API_SCHEME="$(extract_url_scheme "$SUPA_API_URL" | tr '[:upper:]' '[:lower:]')"
+if [[ "$SUPA_API_SCHEME" != "http" && "$SUPA_API_SCHEME" != "https" ]]; then
+  SUPA_API_SCHEME="http"
+fi
+
+DOCKER_HOST_GATEWAY=""
+if command -v docker >/dev/null 2>&1; then
+  DOCKER_HOST_GATEWAY="$(docker network inspect backend-vps_backend --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+  if [[ -z "$DOCKER_HOST_GATEWAY" ]]; then
+    DOCKER_HOST_GATEWAY="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+  fi
+fi
+if [[ -z "$DOCKER_HOST_GATEWAY" ]]; then
+  DOCKER_HOST_GATEWAY="172.17.0.1"
+fi
+
+SUPA_CONTAINER_SCHEME="$SUPA_API_SCHEME"
+SUPA_CONTAINER_URL="${SUPA_CONTAINER_SCHEME}://${DOCKER_HOST_GATEWAY}:${SUPA_API_PORT}"
+
+# Some hosts expose an HTTPS-only Kong listener on the mapped port even when
+# `supabase status` reports an HTTP URL. Detect that response and auto-switch.
+if [[ "$SUPA_CONTAINER_SCHEME" == "http" ]]; then
+  TMP_BODY="$(mktemp)"
+  TMP_CODE="$(mktemp)"
+  if curl -sS -m 5 -o "$TMP_BODY" -w '%{http_code}' "${SUPA_CONTAINER_URL}/rest/v1/" > "$TMP_CODE"; then
+    if [[ "$(cat "$TMP_CODE")" == "400" ]] && grep -qi 'plain HTTP request was sent to HTTPS port' "$TMP_BODY"; then
+      SUPA_CONTAINER_SCHEME="https"
+      SUPA_CONTAINER_URL="${SUPA_CONTAINER_SCHEME}://${DOCKER_HOST_GATEWAY}:${SUPA_API_PORT}"
+      log "Detected HTTPS-only Supabase API port; using ${SUPA_CONTAINER_URL}."
+    fi
+  fi
+  rm -f "$TMP_BODY" "$TMP_CODE"
+fi
 
 upsert_env SUPABASE_URL "$SUPA_CONTAINER_URL"
 upsert_env SUPABASE_KEY "$SUPA_KEY"
 upsert_env SUPABASE_DB_URL "$SUPA_DB_URL"
+if [[ "$SUPA_CONTAINER_SCHEME" == "https" ]]; then
+  # Local Supabase can use a self-signed certificate on this endpoint.
+  upsert_env SUPABASE_HTTP_VERIFY "false"
+fi
 
 echo "Supabase API URL for backend containers: $SUPA_CONTAINER_URL"
 echo "Supabase DB URL: $SUPA_DB_URL"

@@ -13,7 +13,26 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
-mkdir -p "${AUTHELIA_DIR}"
+ensure_authelia_dir_writable() {
+  mkdir -p "${AUTHELIA_DIR}"
+  if touch "${AUTHELIA_DIR}/.perm_check" 2>/dev/null; then
+    rm -f "${AUTHELIA_DIR}/.perm_check"
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    echo "Authelia directory is not writable; attempting ownership repair with sudo..."
+    sudo chown -R "$(id -u):$(id -g)" "${AUTHELIA_DIR}"
+    touch "${AUTHELIA_DIR}/.perm_check"
+    rm -f "${AUTHELIA_DIR}/.perm_check"
+    return 0
+  fi
+
+  echo "Authelia directory is not writable and sudo is unavailable: ${AUTHELIA_DIR}" >&2
+  exit 1
+}
+
+ensure_authelia_dir_writable
 
 bash "${ROOT_DIR}/scripts/bootstrap_internal_tls.sh"
 
@@ -49,9 +68,25 @@ rand_password() {
   openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | cut -c1-24
 }
 
+users_file_has_entries() {
+  [[ -f "${AUTHELIA_USERS}" ]] || return 1
+  grep -Eq '^  [A-Za-z0-9._@-]+:' "${AUTHELIA_USERS}"
+}
+
 PUBLIC_DOMAIN="$(get_env PUBLIC_DOMAIN)"
 if [[ -z "${PUBLIC_DOMAIN}" ]]; then
   echo "PUBLIC_DOMAIN is required in .env before bootstrapping Authelia." >&2
+  exit 1
+fi
+
+AUTHELIA_USERS_SOURCE="$(get_env AUTHELIA_USERS_SOURCE)"
+if [[ -z "${AUTHELIA_USERS_SOURCE}" ]]; then
+  AUTHELIA_USERS_SOURCE="file"
+  set_env AUTHELIA_USERS_SOURCE "${AUTHELIA_USERS_SOURCE}"
+fi
+
+if [[ "${AUTHELIA_USERS_SOURCE}" != "file" && "${AUTHELIA_USERS_SOURCE}" != "env" ]]; then
+  echo "AUTHELIA_USERS_SOURCE must be 'file' or 'env'" >&2
   exit 1
 fi
 
@@ -62,10 +97,6 @@ if [[ -z "${AUTHELIA_AUTH_USERNAME}" ]]; then
 fi
 
 AUTHELIA_AUTH_PASSWORD="$(get_env AUTHELIA_AUTH_PASSWORD)"
-if [[ -z "${AUTHELIA_AUTH_PASSWORD}" ]]; then
-  AUTHELIA_AUTH_PASSWORD="$(rand_password)"
-  set_env AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
-fi
 
 AUTHELIA_SESSION_SECRET="$(get_env AUTHELIA_SESSION_SECRET)"
 if [[ -z "${AUTHELIA_SESSION_SECRET}" ]]; then
@@ -139,6 +170,24 @@ if [[ -z "${AUTHELIA_OIDC_CLIENT_REDIRECT_URI}" ]]; then
   set_env AUTHELIA_OIDC_CLIENT_REDIRECT_URI "${AUTHELIA_OIDC_CLIENT_REDIRECT_URI}"
 fi
 
+AUTHELIA_VAULT_OIDC_CLIENT_ID="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_ID)"
+if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_ID}" ]]; then
+  AUTHELIA_VAULT_OIDC_CLIENT_ID="vault"
+  set_env AUTHELIA_VAULT_OIDC_CLIENT_ID "${AUTHELIA_VAULT_OIDC_CLIENT_ID}"
+fi
+
+AUTHELIA_VAULT_OIDC_CLIENT_SECRET="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET)"
+if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_SECRET}" ]]; then
+  AUTHELIA_VAULT_OIDC_CLIENT_SECRET="$(rand_password)"
+  set_env AUTHELIA_VAULT_OIDC_CLIENT_SECRET "${AUTHELIA_VAULT_OIDC_CLIENT_SECRET}"
+fi
+
+AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI="$(get_env AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI)"
+if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI}" ]]; then
+  AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI="https://${PUBLIC_DOMAIN}/ui/vault/auth/oidc/oidc/callback"
+  set_env AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI "${AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI}"
+fi
+
 GATEWAY_ALLOWED_CIDRS="$(get_env GATEWAY_ALLOWED_CIDRS)"
 if [[ -z "${GATEWAY_ALLOWED_CIDRS}" ]]; then
   SSH_ADMIN_IP="$(echo "${SSH_CONNECTION:-}" | awk '{print $1}')"
@@ -150,15 +199,60 @@ if [[ -z "${GATEWAY_ALLOWED_CIDRS}" ]]; then
   set_env GATEWAY_ALLOWED_CIDRS "${GATEWAY_ALLOWED_CIDRS}"
 fi
 
-AUTHELIA_AUTH_PASSWORD_HASH="$(
-  docker run --rm authelia/authelia:latest \
-    authelia crypto hash generate argon2 --password "${AUTHELIA_AUTH_PASSWORD}" --no-confirm \
-    | awk -F'Digest: ' '/Digest: / {print $2; exit}'
-)"
+if [[ "${AUTHELIA_USERS_SOURCE}" == "env" ]]; then
+  if [[ -z "${AUTHELIA_AUTH_PASSWORD}" ]]; then
+    AUTHELIA_AUTH_PASSWORD="$(rand_password)"
+    set_env AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
+  fi
 
-if [[ -z "${AUTHELIA_AUTH_PASSWORD_HASH}" ]]; then
-  echo "Failed to generate Authelia password hash." >&2
-  exit 1
+  AUTHELIA_AUTH_PASSWORD_HASH="$(
+    docker run --rm authelia/authelia:latest \
+      authelia crypto hash generate argon2 --password "${AUTHELIA_AUTH_PASSWORD}" --no-confirm \
+      | awk -F'Digest: ' '/Digest: / {print $2; exit}'
+  )"
+
+  if [[ -z "${AUTHELIA_AUTH_PASSWORD_HASH}" ]]; then
+    echo "Failed to generate Authelia password hash." >&2
+    exit 1
+  fi
+
+  cat > "${AUTHELIA_USERS}" <<EOF_USERS
+users:
+  ${AUTHELIA_AUTH_USERNAME}:
+    disabled: false
+    displayname: Gateway Administrator
+    password: ${AUTHELIA_AUTH_PASSWORD_HASH}
+    email: admin@${PUBLIC_DOMAIN}
+    groups:
+      - admins
+EOF_USERS
+elif ! users_file_has_entries; then
+  if [[ -z "${AUTHELIA_AUTH_PASSWORD}" ]]; then
+    AUTHELIA_AUTH_PASSWORD="$(rand_password)"
+    set_env AUTHELIA_AUTH_PASSWORD "${AUTHELIA_AUTH_PASSWORD}"
+  fi
+
+  AUTHELIA_AUTH_PASSWORD_HASH="$(
+    docker run --rm authelia/authelia:latest \
+      authelia crypto hash generate argon2 --password "${AUTHELIA_AUTH_PASSWORD}" --no-confirm \
+      | awk -F'Digest: ' '/Digest: / {print $2; exit}'
+  )"
+
+  if [[ -z "${AUTHELIA_AUTH_PASSWORD_HASH}" ]]; then
+    echo "Failed to generate initial Authelia password hash." >&2
+    exit 1
+  fi
+
+  cat > "${AUTHELIA_USERS}" <<EOF_USERS
+users:
+  ${AUTHELIA_AUTH_USERNAME}:
+    disabled: false
+    displayname: Gateway Administrator
+    password: ${AUTHELIA_AUTH_PASSWORD_HASH}
+    email: admin@${PUBLIC_DOMAIN}
+    groups:
+      - admins
+EOF_USERS
 fi
 
 AUTHELIA_OIDC_CLIENT_SECRET_HASH="$(
@@ -172,6 +266,17 @@ if [[ -z "${AUTHELIA_OIDC_CLIENT_SECRET_HASH}" ]]; then
   exit 1
 fi
 
+AUTHELIA_VAULT_OIDC_CLIENT_SECRET_HASH="$(
+  docker run --rm authelia/authelia:latest \
+    authelia crypto hash generate pbkdf2 --password "${AUTHELIA_VAULT_OIDC_CLIENT_SECRET}" --no-confirm \
+    | awk -F'Digest: ' '/Digest: / {print $2; exit}'
+)"
+
+if [[ -z "${AUTHELIA_VAULT_OIDC_CLIENT_SECRET_HASH}" ]]; then
+  echo "Failed to generate Vault OIDC client secret hash." >&2
+  exit 1
+fi
+
 if [[ ! -s "${AUTHELIA_OIDC_JWKS_KEY_PATH}" ]]; then
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${AUTHELIA_OIDC_JWKS_KEY_PATH}"
 fi
@@ -179,17 +284,6 @@ fi
 OIDC_JWKS_KEY_BLOCK="$(
   sed 's/^/          /' "${AUTHELIA_OIDC_JWKS_KEY_PATH}"
 )"
-
-cat > "${AUTHELIA_USERS}" <<EOF
-users:
-  ${AUTHELIA_AUTH_USERNAME}:
-    disabled: false
-    displayname: Gateway Administrator
-    password: ${AUTHELIA_AUTH_PASSWORD_HASH}
-    email: admin@${PUBLIC_DOMAIN}
-    groups:
-      - admins
-EOF
 
 cat > "${AUTHELIA_CONFIG}" <<EOF
 theme: auto
@@ -257,6 +351,24 @@ ${OIDC_JWKS_KEY_BLOCK}
         response_types:
           - "code"
         token_endpoint_auth_method: "client_secret_basic"
+      - client_id: "${AUTHELIA_VAULT_OIDC_CLIENT_ID}"
+        client_name: "Vault"
+        client_secret: '${AUTHELIA_VAULT_OIDC_CLIENT_SECRET_HASH}'
+        public: false
+        authorization_policy: "${AUTHELIA_POLICY}"
+        redirect_uris:
+          - "${AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI}"
+          - "http://localhost:8250/oidc/callback"
+        scopes:
+          - "openid"
+          - "profile"
+          - "email"
+          - "groups"
+        grant_types:
+          - "authorization_code"
+        response_types:
+          - "code"
+        token_endpoint_auth_method: "client_secret_basic"
 
 session:
   secret: ${AUTHELIA_SESSION_SECRET}
@@ -297,18 +409,23 @@ notifier:
     filename: /config/notification.txt
 EOF
 
-chmod 600 "${AUTHELIA_USERS}" "${AUTHELIA_CONFIG}"
-chmod 600 "${AUTHELIA_OIDC_JWKS_KEY_PATH}"
+chmod 600 "${AUTHELIA_CONFIG}" "${AUTHELIA_OIDC_JWKS_KEY_PATH}" || true
+if [[ -f "${AUTHELIA_USERS}" ]]; then
+  chmod 600 "${AUTHELIA_USERS}" || true
+fi
 
 echo "Authelia bootstrap complete."
+echo "  users source: ${AUTHELIA_USERS_SOURCE}"
 echo "  username: ${AUTHELIA_AUTH_USERNAME}"
-echo "  password: ${AUTHELIA_AUTH_PASSWORD}"
+if [[ "${AUTHELIA_USERS_SOURCE}" == "env" || ! users_file_has_entries ]]; then
+  echo "  password: ${AUTHELIA_AUTH_PASSWORD}"
+else
+  echo "  password: (managed via users_database.yml / authelia_user_manage.sh)"
+fi
 echo "  policy: ${AUTHELIA_POLICY}"
 echo "  default 2FA method: ${AUTHELIA_DEFAULT_2FA_METHOD}"
-echo "  session inactivity: ${AUTHELIA_SESSION_INACTIVITY}"
-echo "  session expiration: ${AUTHELIA_SESSION_EXPIRATION}"
-echo "  session remember_me: ${AUTHELIA_SESSION_REMEMBER_ME}"
 echo "  OIDC client id: ${AUTHELIA_OIDC_CLIENT_ID}"
 echo "  OIDC client redirect URI: ${AUTHELIA_OIDC_CLIENT_REDIRECT_URI}"
-echo "  OIDC client secret: ${AUTHELIA_OIDC_CLIENT_SECRET}"
+echo "  Vault OIDC client id: ${AUTHELIA_VAULT_OIDC_CLIENT_ID}"
+echo "  Vault OIDC redirect URI: ${AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI}"
 echo "  allowed CIDRs: ${GATEWAY_ALLOWED_CIDRS}"

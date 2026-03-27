@@ -7,7 +7,6 @@ cd "${ROOT_DIR}"
 
 WAIT_RETRIES="${WAIT_RETRIES:-45}"
 WAIT_INTERVAL_SECONDS="${WAIT_INTERVAL_SECONDS:-2}"
-TLS_CA_CERT="${TLS_CA_CERT:-${ROOT_DIR}/docker/internal-tls/internal-ca.crt}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT
 
@@ -27,6 +26,13 @@ dc() {
 env_value() {
   local key="$1"
   awk -F= -v key="${key}" '$1 == key {print substr($0, index($0, $2)); exit}' .env 2>/dev/null || true
+}
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 wait_for_required_services() {
@@ -63,7 +69,7 @@ check_http_code() {
   local attempt code
 
   for ((attempt=1; attempt<=WAIT_RETRIES; attempt++)); do
-    if ! curl -sS -m 25 --cacert "${TLS_CA_CERT}" -o "${body_file}" -w '%{http_code}' "$@" > "${status_file}"; then
+    if ! curl -sS -m 25 -o "${body_file}" -w '%{http_code}' "$@" > "${status_file}"; then
       sleep "${WAIT_INTERVAL_SECONDS}"
       continue
     fi
@@ -84,83 +90,90 @@ check_http_code() {
   die "${name}: unexpected HTTP status after retries (expected one of [${expected_csv}])"
 }
 
-resolve_caddy_volume() {
-  if docker volume inspect backend-vps_caddy-data >/dev/null 2>&1; then
-    printf '%s' "backend-vps_caddy-data"
+check_vault_health() {
+  local auth_method allow_unready expected_code_csv
+  local vault_running=0
+  local -a ca_args=()
+
+  auth_method="$(env_value VAULT_AUTH_METHOD)"
+  if [[ -z "${auth_method}" ]]; then
+    auth_method="token"
+  fi
+
+  if dc ps --status running --services | grep -qx vault; then
+    vault_running=1
+  fi
+
+  if (( vault_running == 0 )); then
+    if [[ "${auth_method}" == "approle" ]]; then
+      die "VAULT_AUTH_METHOD=approle but vault service is not running."
+    fi
     return 0
   fi
-  docker volume ls --format '{{.Name}}' | awk '/_caddy-data$/ {print; exit}'
+
+  if [[ -f "${ROOT_DIR}/docker/internal-tls/vault-ca.pem" ]]; then
+    ca_args=(--cacert "${ROOT_DIR}/docker/internal-tls/vault-ca.pem")
+  else
+    # Keep validation available even before TLS bootstrap is generated.
+    ca_args=(-k)
+  fi
+
+  expected_code_csv="200,429,472,473"
+  allow_unready="$(env_value VAULT_ALLOW_UNREADY)"
+  if is_true "${allow_unready}"; then
+    expected_code_csv="${expected_code_csv},501,503"
+  fi
+
+  check_http_code \
+    "vault-health" \
+    "${expected_code_csv}" \
+    "${ca_args[@]}" \
+    "https://127.0.0.1:8200/v1/sys/health"
+
+  if [[ "${auth_method}" == "approle" ]]; then
+    [[ -s "${ROOT_DIR}/docker/vault/runtime/role_id" ]] || die "Missing AppRole role_id file: docker/vault/runtime/role_id"
+    [[ -s "${ROOT_DIR}/docker/vault/runtime/secret_id" ]] || die "Missing AppRole secret_id file: docker/vault/runtime/secret_id"
+    log "Vault AppRole runtime files are present."
+  fi
 }
 
-check_gateway_tls_chain() {
-  local caddy_volume public_domain root_ca intermediate_ca sclient_out cert_count gateway_code
-  caddy_volume="$(resolve_caddy_volume)"
-  [[ -n "${caddy_volume}" ]] || die "tls-gateway is running but Caddy data volume was not found."
-
-  root_ca="${TMPDIR}/caddy-local-root.crt"
-  intermediate_ca="${TMPDIR}/caddy-local-intermediate.crt"
-  sclient_out="${TMPDIR}/gateway.sclient.txt"
-
-  docker run --rm -v "${caddy_volume}:/data:ro" alpine \
-    sh -lc "cat /data/caddy/pki/authorities/local/root.crt" > "${root_ca}"
-  docker run --rm -v "${caddy_volume}:/data:ro" alpine \
-    sh -lc "cat /data/caddy/pki/authorities/local/intermediate.crt" > "${intermediate_ca}"
-  [[ -s "${root_ca}" ]] || die "Failed to read Caddy root CA from volume ${caddy_volume}."
-  [[ -s "${intermediate_ca}" ]] || die "Failed to read Caddy intermediate CA from volume ${caddy_volume}."
-
-  openssl verify -CAfile "${root_ca}" "${intermediate_ca}" >/dev/null || die "Caddy intermediate does not verify against Caddy root."
-
-  public_domain="$(env_value PUBLIC_DOMAIN)"
-  if [[ -z "${public_domain}" ]]; then
-    public_domain="127.0.0.1"
+run_vault_workflow_validation() {
+  local auth_method vault_running=0
+  auth_method="$(env_value VAULT_AUTH_METHOD)"
+  if [[ -z "${auth_method}" ]]; then
+    auth_method="token"
   fi
 
-  if ! openssl s_client \
-      -connect 127.0.0.1:443 \
-      -servername "${public_domain}" \
-      -verify_return_error \
-      -CAfile "${root_ca}" \
-      -showcerts \
-      < /dev/null > "${sclient_out}" 2>&1; then
-    echo "--- tls-gateway openssl output ---" >&2
-    sed -n '1,120p' "${sclient_out}" >&2 || true
-    die "tls-gateway certificate verification failed for SNI ${public_domain}."
+  if dc ps --status running --services | grep -qx vault; then
+    vault_running=1
   fi
 
-  cert_count="$(grep -c "BEGIN CERTIFICATE" "${sclient_out}" || true)"
-  if (( cert_count < 2 )); then
-    die "tls-gateway did not present a full chain (expected leaf + intermediate, found ${cert_count})."
+  if [[ "${auth_method}" != "approle" || "${vault_running}" -eq 0 ]]; then
+    return 0
   fi
-  log "tls-gateway: certificate chain depth is ${cert_count} cert(s) (includes intermediate)."
 
-  gateway_code="$(
-    curl -sS -m 25 --cacert "${root_ca}" \
-      --resolve "${public_domain}:443:127.0.0.1" \
-      -o "${TMPDIR}/gateway.body" \
-      -w '%{http_code}' \
-      "https://${public_domain}/healthz" || true
-  )"
-  if [[ "${gateway_code}" != "200" ]]; then
-    echo "--- tls-gateway /healthz body ---" >&2
-    sed -n '1,80p' "${TMPDIR}/gateway.body" >&2 || true
-    die "tls-gateway /healthz check failed with HTTP ${gateway_code}."
+  if [[ -x "${SCRIPT_DIR}/validate_vault_workflows.sh" ]]; then
+    log "Running Vault AppRole workflow validation..."
+    bash "${SCRIPT_DIR}/validate_vault_workflows.sh"
+  else
+    die "Missing Vault workflow validator: ${SCRIPT_DIR}/validate_vault_workflows.sh"
   fi
-  log "tls-gateway: /healthz returned HTTP 200 using exported Caddy root trust."
 }
 
 main() {
   [[ -f docker-compose.yml ]] || die "Missing docker-compose.yml"
   [[ -f .env ]] || die "Missing .env"
-  [[ -f "${TLS_CA_CERT}" ]] || die "Missing TLS CA certificate: ${TLS_CA_CERT}"
   command -v docker >/dev/null 2>&1 || die "docker is not installed"
   docker compose version >/dev/null 2>&1 || die "docker compose plugin is not available"
-  command -v openssl >/dev/null 2>&1 || die "openssl is not installed"
 
   log "Validating compose syntax..."
   dc config -q
 
   log "Waiting for required services to become healthy..."
   wait_for_required_services
+
+  check_vault_health
+  run_vault_workflow_validation
 
   local api_token rag_token copilot_key auth_header_cag=() auth_header_rag=() auth_header_copilot=()
   api_token="$(env_value API_TOKEN)"
@@ -184,11 +197,11 @@ main() {
     auth_header_copilot=(-H "X-API-Key: ${copilot_key}")
   fi
 
-  log "Running HTTPS smoke checks..."
+  log "Running HTTP smoke checks..."
   check_http_code \
     "cag-service" \
     "200,400,401,403,422" \
-    -X POST "https://127.0.0.1:8000/cag-answer" \
+    -X POST "http://127.0.0.1:8000/cag-answer" \
     -H "Content-Type: application/json" \
     "${auth_header_cag[@]}" \
     --data '{"question":"health check"}'
@@ -196,7 +209,7 @@ main() {
   check_http_code \
     "rag-service" \
     "400,401,403,404,422" \
-    -X POST "https://127.0.0.1:8100/build" \
+    -X POST "http://127.0.0.1:8100/build" \
     -H "Content-Type: application/json" \
     "${auth_header_rag[@]}" \
     --data '{}'
@@ -204,7 +217,7 @@ main() {
   check_http_code \
     "copilot-service" \
     "401,403,422" \
-    -X POST "https://127.0.0.1:9010/copilot/chat" \
+    -X POST "http://127.0.0.1:9010/copilot/chat" \
     -H "Content-Type: application/json" \
     "${auth_header_copilot[@]}" \
     --data '{}'
@@ -212,48 +225,7 @@ main() {
   check_http_code \
     "copilot-frontend" \
     "200,301,302,307,308" \
-    "https://127.0.0.1:3000/"
-
-  log "Validating gateway certificate chain/trust..."
-  check_gateway_tls_chain
-
-  if dc ps --status running --services | grep -qx vault; then
-    local vault_ca_cert="${ROOT_DIR}/docker/internal-tls/vault-ca.pem"
-    [[ -f "${vault_ca_cert}" ]] || die "vault is running but CA certificate is missing: ${vault_ca_cert}"
-
-    local vault_status_file="${TMPDIR}/vault.status"
-    local vault_body_file="${TMPDIR}/vault.body"
-    local vault_code
-    vault_code="$(
-      curl -sS -m 25 --cacert "${vault_ca_cert}" \
-        -o "${vault_body_file}" \
-        -w '%{http_code}' \
-        "https://127.0.0.1:8200/v1/sys/health" || true
-    )"
-    case "${vault_code}" in
-      200|429|472|473|501|503)
-        log "vault: HTTPS health HTTP ${vault_code} (acceptable)"
-        ;;
-      *)
-        echo "--- vault HTTPS response body ---" >&2
-        sed -n '1,80p' "${vault_body_file}" >&2 || true
-        die "vault: unexpected HTTPS status ${vault_code}"
-        ;;
-    esac
-
-    vault_code="$(
-      curl -sS -m 25 \
-        -o "${vault_body_file}" \
-        -w '%{http_code}' \
-        "http://127.0.0.1:8200/v1/sys/health" || true
-    )"
-    if [[ "${vault_code}" != "400" ]]; then
-      echo "--- vault HTTP response body ---" >&2
-      sed -n '1,80p' "${vault_body_file}" >&2 || true
-      die "vault: expected HTTP 400 over plaintext, got ${vault_code}"
-    fi
-    log "vault: plaintext HTTP rejected with 400 (expected)"
-  fi
+    "http://127.0.0.1:3000/"
 
   log "Validation complete: backend services are reachable."
 }

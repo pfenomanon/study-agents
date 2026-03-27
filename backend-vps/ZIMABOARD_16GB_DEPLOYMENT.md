@@ -4,7 +4,6 @@ This guide is the full step-by-step path for ZimaBoard deployment with:
 - local Supabase in Docker
 - backend stack containers
 - HTTPS LAN access through `tls-gateway`
-- internal hop-by-hop TLS for CAG/RAG/Copilot/frontend + Vault
 
 ## 0) One-command install/deploy path
 
@@ -14,6 +13,11 @@ bash scripts/install_backend_vps.sh start-local-all
 ```
 
 The installer handles Docker group session timing by using `sg docker` fallback for Docker-dependent helper scripts when needed.
+Then bootstrap non-dev Vault:
+
+```bash
+bash scripts/install_backend_vps.sh bootstrap-vault-nondev
+```
 
 Then run LAN HTTPS setup:
 
@@ -30,7 +34,7 @@ bash scripts/install_backend_vps.sh export-caddy-ca
 sudo apt-get update -y
 sudo apt-get install -y \
   docker.io docker-compose-v2 \
-  curl jq ca-certificates python3 python3-venv \
+  curl jq ca-certificates python3 python3-yaml python3-venv \
   postgresql-client git openssl unzip
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
@@ -62,7 +66,6 @@ Set real values for:
 ### 1.4 Generate API keys and bootstrap auth
 
 ```bash
-bash scripts/bootstrap_internal_tls.sh
 bash scripts/generate_local_api_keys.sh --write-env --overwrite
 sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_authelia.sh'
 ```
@@ -77,6 +80,7 @@ This script installs/starts Supabase, then writes:
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
 - `SUPABASE_DB_URL`
+- `SUPABASE_HTTP_VERIFY` when HTTPS/self-signed local API certs are detected
 
 ### 1.6 Apply schema to local DB
 
@@ -84,18 +88,23 @@ This script installs/starts Supabase, then writes:
 psql "$(awk -F= '/^SUPABASE_DB_URL=/{print $2}' .env)" -v ON_ERROR_STOP=1 -f supabase_schema.sql
 ```
 
-### 1.7 Start backend stack
+### 1.7 Bootstrap non-dev Vault
+
+```bash
+sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_vault_nondev.sh'
+```
+
+### 1.8 Start backend stack
 
 ```bash
 sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --build'
-sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --force-recreate cag-service rag-service copilot-service copilot-frontend tls-gateway authelia redis vault'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml up -d --force-recreate cag-service rag-service copilot-service copilot-frontend tls-gateway authelia redis'
 ```
 
-### 1.8 Validate
+### 1.9 Validate
 
 ```bash
 sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/validate_zimaboard_stack.sh'
-sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/validate_backend_stack.sh'
 ```
 
 ## 2) Configure LAN HTTPS gateway
@@ -123,69 +132,20 @@ Export root CA cert from server:
 bash scripts/export_caddy_root_ca.sh
 ```
 
-This exports:
-- `/home/user1/caddy-local-root.crt`
-- `/home/user1/caddy-local-intermediate.crt`
-- `/home/user1/caddy-local-chain.crt`
-
-Windows client import (PowerShell, run as Administrator):
+Windows client import (PowerShell):
 
 ```powershell
 scp user1@10.72.72.161:/home/user1/caddy-local-root.crt $env:USERPROFILE\Downloads\
-scp user1@10.72.72.161:/home/user1/caddy-local-intermediate.crt $env:USERPROFILE\Downloads\
-
-$stores = @(
-  'Cert:\CurrentUser\Root', 'Cert:\CurrentUser\CA',
-  'Cert:\LocalMachine\Root', 'Cert:\LocalMachine\CA'
-)
-foreach ($store in $stores) {
-  Get-ChildItem $store | Where-Object { $_.Subject -like '*Caddy Local Authority*' } | Remove-Item -Force
-}
-
-Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation 'Cert:\CurrentUser\Root'
-Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-intermediate.crt" -CertStoreLocation 'Cert:\CurrentUser\CA'
-Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation 'Cert:\LocalMachine\Root'
-Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-intermediate.crt" -CertStoreLocation 'Cert:\LocalMachine\CA'
+Import-Certificate -FilePath "$env:USERPROFILE\Downloads\caddy-local-root.crt" -CertStoreLocation Cert:\CurrentUser\Root
 ```
 
 Restart browser and reopen `https://10.72.72.161/`.
-Any time `caddy-data` is recreated (or Caddy local CA rotates), repeat this trust step on every client.
 
 ## 4) URLs
 
 - Frontend through gateway (LAN HTTPS): `https://<PUBLIC_DOMAIN>/`
-- Frontend direct container bind (localhost only, internal cert): `https://127.0.0.1:3000/`
-- Supabase local API (TLS): `https://127.0.0.1:54321`
-
-Plaintext checks:
-- `http://127.0.0.1:8200` (Vault) is expected to fail with HTTP `400` because Vault is TLS-only.
-- `http://127.0.0.1:54321` (Supabase API) is expected to fail with HTTP `400`.
-
-## 4.1) E2E encryption verification commands
-
-```bash
-cd /home/user1/study-agents/backend-vps
-CA=docker/internal-tls/internal-ca.crt
-VAULT_CA=docker/internal-tls/vault-ca.pem
-
-curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8000/cag-answer -H 'content-type: application/json' --data '{"question":"health check"}'
-curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8100/build -H 'content-type: application/json' --data '{}'
-curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:9010/copilot/chat -H 'content-type: application/json' --data '{}'
-curl --cacert "$CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:3000/
-curl --cacert "$VAULT_CA" -sS -o /dev/null -w '%{http_code}\n' https://127.0.0.1:8200/v1/sys/health
-curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8200/v1/sys/health
-GATEWAY_CA=/home/user1/caddy-local-root.crt
-curl --cacert "$GATEWAY_CA" --resolve 10.72.72.161:443:127.0.0.1 -sS -o /dev/null -w '%{http_code}\n' https://10.72.72.161/healthz
-```
-
-Expected:
-- Service calls return acceptable app-level statuses.
-- Vault HTTPS returns `200` (or another valid health code).
-- Vault plaintext returns `400`.
-
-Exposure rule:
-- Publish only `443` to LAN/WAN clients.
-- Keep direct service ports (`3000`, `8000`, `8100`, `9010`, `8200`) local/private.
+- Frontend direct container bind (local host only): `http://127.0.0.1:3000/`
+- Supabase local API: `http://127.0.0.1:54321`
 
 ## 5) Authelia one-time code during 2FA setup
 

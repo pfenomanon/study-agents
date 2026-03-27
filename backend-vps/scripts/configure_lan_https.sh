@@ -41,9 +41,9 @@ upsert_env() {
 
 upsert_env PUBLIC_DOMAIN "$PUBLIC_DOMAIN"
 upsert_env AUTHELIA_OIDC_CLIENT_REDIRECT_URI "https://${PUBLIC_DOMAIN}/oidc/callback"
+upsert_env AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI "https://${PUBLIC_DOMAIN}/ui/vault/auth/oidc/oidc/callback"
 upsert_env GATEWAY_ALLOWED_CIDRS "127.0.0.1/32 ::1/128 ${ALLOW_CIDR}"
 
-bash scripts/bootstrap_internal_tls.sh
 bash scripts/bootstrap_authelia.sh
 
 if docker compose ps >/dev/null 2>&1; then

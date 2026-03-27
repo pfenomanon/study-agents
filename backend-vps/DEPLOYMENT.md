@@ -39,12 +39,16 @@ python scripts/build_release_bundles.py
 2. Set required values:
    - `OPENAI_API_KEY` (and `OPENAI_EMBED_MODEL` if you want a different model)
    - `SUPABASE_URL`, `SUPABASE_KEY`
+   - If your Supabase endpoint is HTTPS with a private/self-signed cert, set `SUPABASE_HTTP_VERIFY=false` (or provide a trusted CA and keep it `true`)
    - Optional DB DSN for schema automation: `SUPABASE_DB_URL`
    - `OLLAMA_HOST`/`OLLAMA_API_KEY` if using Ollama cloud
    - `OLLAMA_REASON_MODEL` for default Ollama reasoning model (used when platform is `ollama` and no per-request model is supplied)
    - API auth tokens: `API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`
    - Token-requirement defaults are enabled: `API_REQUIRE_TOKEN=true`, `RAG_REQUIRE_TOKEN=true`, `COPILOT_REQUIRE_TOKEN=true`
    - Gateway/Auth values: `PUBLIC_DOMAIN`, `ACME_EMAIL`, optional `GATEWAY_ALLOWED_CIDRS`
+   - Authelia user mode: `AUTHELIA_USERS_SOURCE=file` (recommended) or `env`
+   - Vault runtime values (non-dev flow): `VAULT_ADDR`, `VAULT_CACERT`, `VAULT_AUTH_METHOD=approle`, `VAULT_ROLE_ID_FILE`, `VAULT_SECRET_ID_FILE`
+   - Vault UI OIDC client values: `AUTHELIA_VAULT_OIDC_CLIENT_ID`, `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`, `AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI`
    - Optional toggles: `USE_HYBRID_RETRIEVAL=true`, `RAG_USE_DOCLING=true`
    - Optional security controls: request limits (`*_RATE_LIMIT_PER_MINUTE`), body limits (`COPILOT_MAX_BODY_BYTES`), path allowlists (`RAG_ALLOWED_*`, `COPILOT_ALLOWED_FILE_ROOTS`), and crawler SSRF guard (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`)
    - Generate local service tokens with:
@@ -135,10 +139,12 @@ Authelia bootstrap generates missing local secrets automatically:
 - `AUTHELIA_AUTH_PASSWORD` and `AUTHELIA_OIDC_CLIENT_SECRET`: 24-char alphanumeric
 - `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET`: 64-char hex (32 random bytes each)
 - `docker/authelia/oidc_jwks_rs256.pem`: RSA-2048 signing key
+- `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`: Vault UI OIDC client secret (24-char alphanumeric)
 
 Default behavior after bootstrap:
+- `AUTHELIA_USERS_SOURCE=file` keeps user auth in `docker/authelia/users_database.yml` so plaintext passwords do not need to remain in `.env`
 - Login username is in `AUTHELIA_AUTH_USERNAME` (defaults to `gateway-admin`)
-- Login password is generated/stored in `AUTHELIA_AUTH_PASSWORD` if not set
+- Login password is generated/stored in `AUTHELIA_AUTH_PASSWORD` only for first bootstrap or when `AUTHELIA_USERS_SOURCE=env`
 - Login regulation: 3 failed attempts then 20 minute cooldown (IP-based, to avoid user-target lockout abuse)
 - MFA policy is enforced (`AUTHELIA_POLICY=two_factor`) with default second factor method `AUTHELIA_DEFAULT_2FA_METHOD=totp`
 - Session policy defaults:
@@ -151,7 +157,28 @@ Default behavior after bootstrap:
   - Gateway exposes OIDC endpoints without pre-auth redirect: `/.well-known/*`, `/jwks.json`, `/api/oidc/*`
   - Bootstrap creates an OIDC signing key at `docker/authelia/oidc_jwks_rs256.pem`
   - Bootstrap seeds one client from env: `AUTHELIA_OIDC_CLIENT_ID`, `AUTHELIA_OIDC_CLIENT_SECRET`, `AUTHELIA_OIDC_CLIENT_REDIRECT_URI`
+  - Bootstrap also seeds a Vault admin client: `AUTHELIA_VAULT_OIDC_CLIENT_ID`, `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`, `AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI`
 - Gateway IP allowlist is enforced via `GATEWAY_ALLOWED_CIDRS`
+
+Manage Authelia users without plaintext `.env` passwords:
+```bash
+bash scripts/authelia_user_manage.sh list
+bash scripts/authelia_user_manage.sh add admin2 "Admin Two" admin2@local admins
+bash scripts/authelia_user_manage.sh rotate-password gateway-admin
+```
+
+Bootstrap non-dev Vault (persistent raft + TLS + AppRole + OIDC admin login):
+```bash
+bash scripts/install_backend_vps.sh bootstrap-vault-nondev
+```
+
+This action:
+- Enables Vault non-dev mode with raft persistence under `docker/vault/data`
+- Initializes/unseals Vault and writes init material to `docker/vault/bootstrap/init.json`
+- Creates `study-agents-runtime` read policy + AppRole credentials in `docker/vault/runtime/{role_id,secret_id}`
+- Configures Vault OIDC auth using your existing Authelia IdP/gateway flow for Vault UI admin login
+- Syncs non-placeholder `.env` secrets into `kv/study-agents/*`
+- Recreates runtime services to consume Vault via AppRole (`VAULT_AUTH_METHOD=approle`)
 
 ## Run Natively (venv)
 ```bash

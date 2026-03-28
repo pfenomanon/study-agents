@@ -80,7 +80,13 @@ else
 fi
 
 echo "==> Ensuring Docker Compose plugin is installed..."
-install_if_missing docker-compose-plugin
+if ! docker compose version >/dev/null 2>&1; then
+  if ! apt-get install -y docker-compose-plugin; then
+    apt-get install -y docker-compose-v2
+  fi
+else
+  echo "==> Docker Compose already available."
+fi
 
 install_supabase_cli() {
   if command -v supabase >/dev/null 2>&1; then
@@ -95,9 +101,22 @@ install_supabase_cli() {
   fi
 
   echo "==> Official installer failed. Downloading fallback binary..."
-  local tmp_dir
+  local arch asset tmp_dir
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)
+      asset="supabase_linux_amd64.tar.gz"
+      ;;
+    aarch64|arm64)
+      asset="supabase_linux_arm64.tar.gz"
+      ;;
+    *)
+      echo "Unsupported architecture for Supabase CLI fallback installer: ${arch}" >&2
+      exit 1
+      ;;
+  esac
   tmp_dir="$(mktemp -d)"
-  curl -L https://github.com/supabase/cli/releases/latest/download/supabase_linux_amd64.tar.gz \
+  curl -fL "https://github.com/supabase/cli/releases/latest/download/${asset}" \
     -o "$tmp_dir/supabase.tar.gz"
   tar -xzf "$tmp_dir/supabase.tar.gz" -C "$tmp_dir"
   install -m 755 "$tmp_dir/supabase" /usr/local/bin/supabase

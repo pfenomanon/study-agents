@@ -13,23 +13,22 @@ This repo can be moved to any Linux host (including AWS EC2) and run either nati
   - Copilot frontend: `node:20-alpine`
 
 ## Package → Host
-1. Copy the tarball from `dist/`, e.g. `study-agents-YYYYMMDDHHMMSS.tar.gz`, to the target host:
+1. Build the release bundles:
    ```bash
-   scp dist/study-agents-*.tar.gz user@host:/opt/
+   python scripts/build_release_bundles.py
    ```
-2. Extract and enter the project:
+2. Copy the backend tarball from `dist/` to the target host:
+   ```bash
+   scp dist/study-agents-backend-vps-*.tar.gz user@host:/opt/
+   ```
+3. Extract and enter the project:
    ```bash
    cd /opt
-   tar -xzf study-agents-*.tar.gz
-   cd study-agents
+   tar -xzf study-agents-backend-vps-*.tar.gz
+   cd study-agents-backend-vps-*
    ```
 
-Alternative (recommended for repeatable multi-host rollout):
-
-```bash
-python scripts/build_release_bundles.py
-# Use dist/study-agents-backend-vps-<timestamp>.tar.gz on each VPS
-```
+This tarball format matches the output from `scripts/build_release_bundles.py`.
 
 ## Configure Environment
 1. Create your env file:
@@ -39,17 +38,12 @@ python scripts/build_release_bundles.py
 2. Set required values:
    - `OPENAI_API_KEY` (and `OPENAI_EMBED_MODEL` if you want a different model)
    - `SUPABASE_URL`, `SUPABASE_KEY`
-   - If your Supabase endpoint is HTTPS with a private/self-signed cert, set `SUPABASE_HTTP_VERIFY=false` (or provide a trusted CA and keep it `true`)
    - Optional DB DSN for schema automation: `SUPABASE_DB_URL`
    - `OLLAMA_HOST`/`OLLAMA_API_KEY` if using Ollama cloud
    - `OLLAMA_REASON_MODEL` for default Ollama reasoning model (used when platform is `ollama` and no per-request model is supplied)
    - API auth tokens: `API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`
    - Token-requirement defaults are enabled: `API_REQUIRE_TOKEN=true`, `RAG_REQUIRE_TOKEN=true`, `COPILOT_REQUIRE_TOKEN=true`
    - Gateway/Auth values: `PUBLIC_DOMAIN`, `ACME_EMAIL`, optional `GATEWAY_ALLOWED_CIDRS`
-   - Authelia user mode: `AUTHELIA_USERS_SOURCE=file` (recommended) or `env`
-   - Vault runtime values (non-dev flow): `VAULT_ADDR`, `VAULT_CACERT`, `VAULT_AUTH_METHOD=approle`, `VAULT_ROLE_ID_FILE`, `VAULT_SECRET_ID_FILE`
-   - Vault hardening toggles: `ALLOW_PLAINTEXT_ENV_SECRETS=false`, `VAULT_SCRUB_ENV_SECRETS=true`
-   - Vault UI OIDC client values: `AUTHELIA_VAULT_OIDC_CLIENT_ID`, `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`, `AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI`
    - Optional toggles: `USE_HYBRID_RETRIEVAL=true`, `RAG_USE_DOCLING=true`
    - Optional security controls: request limits (`*_RATE_LIMIT_PER_MINUTE`), body limits (`COPILOT_MAX_BODY_BYTES`), path allowlists (`RAG_ALLOWED_*`, `COPILOT_ALLOWED_FILE_ROOTS`), and crawler SSRF guard (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`)
    - Generate local service tokens with:
@@ -82,22 +76,25 @@ For full hop-by-hop encryption (client -> gateway -> service -> data dependencie
    ```bash
    bash scripts/bootstrap_authelia.sh
    ```
-3. Validate Vault/OIDC gateway routes after auth/gateway bootstrap:
-   ```bash
-   bash scripts/validate_gateway_oidc_routes.sh <public-domain-or-ip>
-   ```
-4. Keep these set in `.env`:
+3. Keep these set in `.env`:
    - `PUBLIC_DOMAIN`, `ACME_EMAIL`
    - `VAULT_ADDR_INTERNAL=https://vault:8200`
    - `VAULT_CACERT_INTERNAL=/tls/vault-ca.pem`
-5. Do not expose direct service ports externally (`3000`, `8000`, `8100`, `9010`, `8200`). Expose only `443`.
-6. Export and trust the local gateway CA on client devices when using local/internal PKI:
+   - `VAULT_AUTH_METHOD=approle`
+   - `VAULT_ROLE_ID_FILE_INTERNAL=/vault/bootstrap/role_id`
+   - `VAULT_SECRET_ID_FILE_INTERNAL=/vault/bootstrap/secret_id`
+4. Do not expose direct service ports externally (`3000`, `8000`, `8100`, `9010`, `8200`). Expose only `443`.
+5. Export and trust the local gateway CA on client devices when using local/internal PKI:
    ```bash
    bash scripts/export_caddy_root_ca.sh
    ```
    - Export now includes root + intermediate + chain files.
    - On Windows clients, remove old `Caddy Local Authority` certs from `Root`/`CA` stores before importing the current root+intermediate.
    - If `caddy-data` is recreated (new host, volume cleanup, compose project rename), repeat client trust import on every device.
+6. Bootstrap non-dev Vault (persistent Raft + AppRole runtime + OIDC admin):
+   ```bash
+   bash scripts/bootstrap_vault_nondev.sh
+   ```
 
 ## Run with Docker Compose (recommended)
 Recommended orchestrated deploy (installs host deps, validates `.env`, starts stack, and runs smoke checks):
@@ -125,7 +122,7 @@ Services:
 - `redis`: session + login-regulation state for gateway auth
 - `authelia`: authentication portal/MFA and forward-auth backend
 - `tls-gateway` (port 443): machine-terminated HTTPS endpoint for remote clients
-- `vault` (port 8200 localhost bind, TLS): optional secret source for runtime env injection
+- `vault` (port 8200 localhost bind, TLS): optional persistent non-dev secrets source (Raft storage) for runtime env injection
 - Vision capture: UI card and `/copilot/capture` endpoint are available; they need a display. For headless use, post images to `/cag-ocr-answer` or run capture on a GUI host.
 
 Build model:
@@ -144,15 +141,10 @@ Authelia bootstrap generates missing local secrets automatically:
 - `AUTHELIA_AUTH_PASSWORD` and `AUTHELIA_OIDC_CLIENT_SECRET`: 24-char alphanumeric
 - `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET`: 64-char hex (32 random bytes each)
 - `docker/authelia/oidc_jwks_rs256.pem`: RSA-2048 signing key
-- `docker/authelia/runtime/`: writable Authelia state (`db.sqlite3`, `notification.txt`)
-- `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`: Vault UI OIDC client secret (24-char alphanumeric)
 
 Default behavior after bootstrap:
-- `AUTHELIA_USERS_SOURCE=file` keeps user auth in `docker/authelia/users_database.yml` so plaintext passwords do not need to remain in `.env`
-- Authelia runs unprivileged via `AUTHELIA_CONTAINER_UID`/`AUTHELIA_CONTAINER_GID` (auto-set on bootstrap when missing).
-- Authelia mounts `configuration.yml`, `users_database.yml`, and `oidc_jwks_rs256.pem` read-only inside the container; only `docker/authelia/runtime/` is writable.
 - Login username is in `AUTHELIA_AUTH_USERNAME` (defaults to `gateway-admin`)
-- Login password is generated/stored in `AUTHELIA_AUTH_PASSWORD` only for first bootstrap or when `AUTHELIA_USERS_SOURCE=env`
+- Login password is generated/stored in `AUTHELIA_AUTH_PASSWORD` if not set
 - Login regulation: 3 failed attempts then 20 minute cooldown (IP-based, to avoid user-target lockout abuse)
 - MFA policy is enforced (`AUTHELIA_POLICY=two_factor`) with default second factor method `AUTHELIA_DEFAULT_2FA_METHOD=totp`
 - Session policy defaults:
@@ -165,40 +157,28 @@ Default behavior after bootstrap:
   - Gateway exposes OIDC endpoints without pre-auth redirect: `/.well-known/*`, `/jwks.json`, `/api/oidc/*`
   - Bootstrap creates an OIDC signing key at `docker/authelia/oidc_jwks_rs256.pem`
   - Bootstrap seeds one client from env: `AUTHELIA_OIDC_CLIENT_ID`, `AUTHELIA_OIDC_CLIENT_SECRET`, `AUTHELIA_OIDC_CLIENT_REDIRECT_URI`
-  - Bootstrap also seeds a Vault admin client: `AUTHELIA_VAULT_OIDC_CLIENT_ID`, `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`, `AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI`
 - Gateway IP allowlist is enforced via `GATEWAY_ALLOWED_CIDRS`
 
-Manage Authelia users without plaintext `.env` passwords:
-```bash
-bash scripts/authelia_user_manage.sh list
-bash scripts/authelia_user_manage.sh add admin2 "Admin Two" admin2@local admins
-bash scripts/authelia_user_manage.sh rotate-password gateway-admin
-```
+Secure user-management option (recommended after initial bootstrap):
+- Use file-managed users (no plaintext password in `.env`):
+  - `bash scripts/authelia_user_manage.sh add <username>`
+  - `bash scripts/authelia_user_manage.sh rotate-password <username>`
+  - `bash scripts/authelia_user_manage.sh disable <username>`
+- The script sets `AUTHELIA_USERS_SOURCE=file` and updates `docker/authelia/users_database.yml`.
+- When `AUTHELIA_USERS_SOURCE=file`, `scripts/bootstrap_authelia.sh` preserves the existing user database and does not overwrite users from `.env`.
 
-Bootstrap non-dev Vault (persistent raft + TLS + AppRole + OIDC admin login):
-```bash
-bash scripts/install_backend_vps.sh bootstrap-vault-nondev
-```
-
-This action:
-- Enables Vault non-dev mode with raft persistence under `docker/vault/data`
-- Initializes/unseals Vault and writes init material to `docker/vault/bootstrap/init.json`
-- Creates `study-agents-runtime` read policy + AppRole credentials in `docker/vault/runtime/{role_id,secret_id}`
-- Configures Vault OIDC auth using your existing Authelia IdP/gateway flow for Vault UI admin login
-- Recreates auth gateway services and validates required Vault UI/OIDC popup routes
-- Syncs non-placeholder `.env` secrets into `kv/study-agents/*` (runtime, OLLAMA, and Authelia secret material)
-- Scrubs synced plaintext runtime/Ollama/Authelia secret values from `.env` for Vault-first runtime (backup saved to `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`)
-- Recreates runtime services to consume Vault via AppRole (`VAULT_AUTH_METHOD=approle`)
-
-Vault UI OIDC sign-in fields:
-- Method: `OIDC`
-- Role: `vault-admin`
-- Mount path: `oidc`
-
-If Vault login popup is blank/404 or fails to complete:
-```bash
-bash scripts/install_backend_vps.sh validate-gateway-oidc <public-domain-or-ip>
-```
+Vault non-dev operations:
+- Primary bootstrap:
+  - `bash scripts/bootstrap_vault_nondev.sh`
+- This script initializes/unseals Vault, writes runtime/admin policies, configures AppRole credentials for services, syncs secrets from `.env`, and wires Vault OIDC admin auth through Authelia.
+- AppRole credentials are written to:
+  - `docker/vault/bootstrap/role_id`
+  - `docker/vault/bootstrap/secret_id`
+- Vault init material is stored at:
+  - `docker/vault/bootstrap/init.json` (treat as highly sensitive)
+- Admin OIDC login:
+  - `vault login -method=oidc -address=https://127.0.0.1:8200 role=vault-admin`
+  - Vault UI: `https://127.0.0.1:8200/ui/` (use SSH tunnel if remote)
 
 ## Run Natively (venv)
 ```bash

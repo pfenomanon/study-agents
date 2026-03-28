@@ -14,10 +14,12 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
   - `dist/study-agents-backend-vps-<timestamp>.tar.gz`
   - `dist/study-agents-windows-client-<timestamp>.zip`
   - plus `dist/DEPLOYMENT-QUICKSTART-<timestamp>.md` with copy/paste commands.
-- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `deploy`, `start-local-all`, `bootstrap-vault-nondev`, `configure-lan-https`, `validate-gateway-oidc`, `export-caddy-ca`, `reclaim-disk`, `apply-schema`, `restart`, `validate`, `status`, `logs`, `stop`).
-- `scripts/validate_backend_stack.sh`: waits for required containers and runs HTTP smoke checks for CAG/RAG/Copilot/frontend endpoints.
+- `scripts/install_backend_vps.sh`: one-script backend installer/runner for new VPS hosts (`deps`, `start`, `deploy`, `start-local-all`, `bootstrap-internal-tls`, `configure-lan-https`, `export-caddy-ca`, `bootstrap-vault-nondev`, `reclaim-disk`, `apply-schema`, `restart`, `validate`, `status`, `logs`, `stop`).
+- `scripts/validate_backend_stack.sh`: waits for required containers and runs HTTPS smoke checks for CAG/RAG/Copilot/frontend, plus Vault TLS checks when Vault is running.
+- `scripts/bootstrap_vault_nondev.sh`: initializes persistent non-dev Vault (Raft), configures runtime policies/AppRole, syncs secrets from `.env`, and wires Vault OIDC admin login to Authelia.
 - `scripts/install_zimaboard_16gb.sh`: host-prep + start/validate workflow tuned for x86_64 16GB boards.
 - `scripts/generate_local_api_keys.sh`: generates local service auth tokens (`API_TOKEN`, `RAG_API_TOKEN`, `COPILOT_API_KEY`, `SCENARIO_API_KEY`) with compatible entropy/format.
+- `scripts/authelia_user_manage.sh`: securely add/rotate/disable/delete Authelia users with Argon2 hashes in `docker/authelia/users_database.yml` (no plaintext password required in `.env`).
 - `docker-compose.yml`: builds/runs the multi-service stack (CAG API 8000, RAG builder 8100, Copilot API 9010, Next.js UI 3000, plus a utility image for CLIs).
 - `docker-compose.zimaboard.yml`: compose override with resource limits and optional `tools`/`vault` profiles for 16GB hosts.
 - `docker/python.Dockerfile`: single shared Python runtime image used by CAG/RAG/Copilot/utility services with service-specific commands.
@@ -29,7 +31,7 @@ Local agent stack for PDF RAG + vision-driven subject-matter-expert assistance, 
 
 ## CAG HTTP API & Thin Client
 
-- `study-agents-api` runs a small HTTP server inside the Docker container (port `8000`) that exposes:
+- `study-agents-api` runs a small API server inside the Docker container (port `8000`, HTTPS in compose by default via internal certs) that exposes:
   - `POST /cag-answer` – body `{"question": "..."}` -> CAGAgent.enhanced_retrieve_context (vector + knowledge graph) -> answer JSON.
   - `POST /cag-ocr-answer` – multipart `image=@screenshot.png` -> OCR + CAGAgent.enhanced_retrieve_context -> answer JSON.
 - Every successful call appends a Markdown entry to `data/qa_sessions/qa_log.md` with:
@@ -165,14 +167,19 @@ Example interactions:
 # Build and start everything
 docker compose up -d --build
 
-# Test CAG HTTP API
-curl -X POST http://localhost:8000/cag-answer \
+# Test CAG API over local TLS
+CA=docker/internal-tls/internal-ca.crt
+API_TOKEN="${API_TOKEN:-<cag-token>}"
+RAG_TOKEN="${RAG_API_TOKEN:-$API_TOKEN}"
+curl --cacert "$CA" -X POST https://localhost:8000/cag-answer \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: ${API_TOKEN}" \
   -d '{"question": "What are the eligibility requirements for TWIA coverage?"}'
 
-# Trigger RAG builder via HTTP
-curl -X POST http://localhost:8100/build \
+# Trigger RAG builder over local TLS
+curl --cacert "$CA" -X POST https://localhost:8100/build \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: ${RAG_TOKEN}" \
   -d '{"pdf_path": "/app/data/pdf/TWIA-Commercial-Policy-HB-3208.pdf", "outdir": "/app/data/output", "push": true}'
 
 # Run the web research crawler inside the utility service
@@ -287,33 +294,12 @@ Press `Ctrl+C` to stop every managed process gracefully.
 - Image uploads are size/type limited (`MAX_UPLOAD_BYTES`, PNG/JPEG only), and temporary OCR images can be auto-deleted with `DELETE_TEMP_IMAGES=true`.
 - File-processing endpoints are root-constrained. Configure allowlists via `RAG_ALLOWED_INPUT_ROOTS`, `RAG_ALLOWED_OUTPUT_ROOTS`, and `COPILOT_ALLOWED_FILE_ROOTS`.
 - Web crawling blocks localhost/private-network targets by default (`WEB_RESEARCH_ALLOW_PRIVATE_NETWORKS=false`) to reduce SSRF risk.
-- Containers drop root privileges (`USER app`). Bind only required ports; the default compose uses an internal `backend` network.
-- TLS is terminated on the machine via `tls-gateway` (Caddy). Point `PUBLIC_DOMAIN` DNS to the host and use `https://<domain>/...` from remote clients.
+- Most runtime services use the non-root image user (`USER app`). `copilot-service` and `copilot-frontend` currently run as root (`user: "0:0"`) for host-volume compatibility.
+- TLS is terminated on the machine via `tls-gateway` (Caddy), and internal service hops are also TLS-encrypted with a private CA (`scripts/bootstrap_internal_tls.sh`).
 - Keep direct service ports (`8000`, `8100`, `9010`) private; expose only the TLS gateway (`443`) for remote clients.
-- Authelia now runs as an unprivileged UID/GID (`AUTHELIA_CONTAINER_UID`/`AUTHELIA_CONTAINER_GID`) and mounts auth/config files read-only; only `docker/authelia/runtime/` is writable for `db.sqlite3` + notifier state.
-- Authelia user management without storing plaintext in `.env`:
-  ```bash
-  bash scripts/authelia_user_manage.sh list
-  bash scripts/authelia_user_manage.sh add admin2 "Admin Two" admin2@local admins
-  bash scripts/authelia_user_manage.sh rotate-password gateway-admin
-  ```
-- Vault non-dev bootstrap:
-  ```bash
-  bash scripts/install_backend_vps.sh bootstrap-vault-nondev
-  ```
-  This provisions persistent Vault storage (`raft`), enables service AppRole auth, configures Vault UI OIDC admin login via your Authelia IdP flow, validates required gateway OIDC routes, syncs/scrubs runtime + OLLAMA + Authelia secret values from `.env`, and injects runtime secrets through `scripts/use_env.sh` using short-lived Vault tokens.
-- Re-run/standalone gateway OIDC route validation:
-  ```bash
-  bash scripts/install_backend_vps.sh validate-gateway-oidc <public-domain-or-ip>
-  ```
-- Vault UI OIDC sign-in fields:
-  - Method: `OIDC`
-  - Role: `vault-admin`
-  - Mount path: `oidc`
-- Vault-first hardening defaults:
-  - `ALLOW_PLAINTEXT_ENV_SECRETS=false`
-  - `VAULT_SCRUB_ENV_SECRETS=true`
-  - `.env` pre-scrub backup path: `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`
+- For LAN/internal PKI gateway access, export trust material with `bash scripts/export_caddy_root_ca.sh` (root + intermediate + chain), remove stale `Caddy Local Authority` certs on clients, then import the current certs.
+- Prefer file-managed Authelia users for credential rotation: `bash scripts/authelia_user_manage.sh add <user>` / `rotate-password <user>`. This sets `AUTHELIA_USERS_SOURCE=file` so `bootstrap_authelia.sh` preserves `users_database.yml` and avoids storing plaintext admin passwords in `.env`.
+- Vault (optional, OSS): compose now supports non-dev persistent Vault (Raft + TLS). Bootstrap with `bash scripts/bootstrap_vault_nondev.sh`, which creates AppRole runtime auth and OIDC admin login via Authelia. Runtime services use `VAULT_AUTH_METHOD=approle` plus mounted `role_id`/`secret_id` files and fetch secrets from `kv/data/study-agents/*` via `scripts/use_env.sh`.
 
 ## Testing
 
@@ -323,9 +309,8 @@ Press `Ctrl+C` to stop every managed process gracefully.
 If you prefer to run Supabase locally on the VPS instead of the cloud project, use the helper script:
 
 ```bash
-cd /home/study-agents
-chmod +x scripts/setup_local_supabase.sh
-./scripts/setup_local_supabase.sh
+cd /path/to/study-agents/backend-vps
+bash scripts/setup_local_supabase.sh
 ```
 
 The script:
@@ -334,7 +319,6 @@ The script:
 3. Reads the REST URL + key from `supabase status --json` and updates `.env`.
    - It prefers `service_role` key (recommended for backend write/ingestion features).
    - If only anon key is discoverable, it uses anon and prints a warning.
-   - If Docker-container access resolves to an HTTPS-only local API port, it auto-switches `SUPABASE_URL` to `https://...` and writes `SUPABASE_HTTP_VERIFY=false` for self-signed local cert compatibility.
 
 Typical local Supabase containers include:
 - Postgres (`supabase_db_*`)
@@ -356,7 +340,7 @@ supabase status
 docker ps --format '{{.Names}}\t{{.Image}}' | rg -i 'supabase|study-agents'
 ```
 
-Supabase Studio (GUI) and APIs are exposed on `http://127.0.0.1:5432x` ports (the CLI output lists the exact URLs). Tunnel or proxy those ports if you need remote access.
+Supabase Studio (GUI) and APIs are exposed on local `127.0.0.1:5432x` ports (the CLI output lists exact URLs). API TLS can be enabled via `supabase/config.toml` (`[api.tls]`) and provisioned by `scripts/bootstrap_internal_tls.sh`.
 
 ## One-Step Bootstrap
 
@@ -371,10 +355,10 @@ The script will:
 1. Detect the embedded `study-agents-*.zip`, unpack it into `/home/study-agents` (if not already present).
 2. Install Docker/Docker Compose, the Supabase CLI, and `unzip` as needed.
 3. Start the local Supabase stack and update `.env`.
-4. Stop/remove any stale project containers that might be holding ports 8000/8100.
+4. Stop/remove stale project containers that might still be holding backend ports.
 5. Run `docker compose up -d --build`.
 
-When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show `cag-service` and `rag-service` running.
+When it finishes, the repo lives in `/home/study-agents` and `docker compose ps` will show the core stack (CAG/RAG/Copilot/frontend/gateway/auth) running.
 If Supabase’s official installer is unreachable, the script automatically falls back to downloading the latest CLI binary from GitHub releases as a fallback.
 
 ## Rebuild the Bootstrap Bundle

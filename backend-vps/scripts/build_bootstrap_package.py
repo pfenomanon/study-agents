@@ -7,12 +7,12 @@ import os
 import shutil
 import stat
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-TIMESTAMP = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+TIMESTAMP = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 PROJECT_ZIP = DIST / f"study-agents-{TIMESTAMP}.zip"
 BUNDLE_ZIP = DIST / f"bootstrap-package-{TIMESTAMP}.zip"
 
@@ -29,13 +29,38 @@ EXCLUDE_DIRS = {
     "dist",
 }
 EXCLUDE_FILES = {".DS_Store", "Thumbs.db"}
+EXCLUDE_PATH_PREFIXES = {
+    Path("docker/authelia"),
+    Path("docker/internal-tls"),
+    Path("docker/vault/bootstrap"),
+    Path("docker/vault/data"),
+    Path("data"),
+    Path("knowledge_graph"),
+    Path("research_output"),
+    Path("temp_images"),
+    Path("supabase/.temp"),
+}
+
+
+def has_prefix(path: Path, prefix: Path) -> bool:
+    return path == prefix or prefix in path.parents
+
+
+def should_skip_path(rel_path: Path) -> bool:
+    return any(has_prefix(rel_path, prefix) for prefix in EXCLUDE_PATH_PREFIXES)
 
 
 def should_skip_dir(rel_path: Path) -> bool:
+    if should_skip_path(rel_path):
+        return True
     return any(part in EXCLUDE_DIRS for part in rel_path.parts if part not in (".", ""))
 
 
 def should_skip_file(rel_path: Path) -> bool:
+    if rel_path.name == ".env":
+        return True
+    if should_skip_path(rel_path):
+        return True
     if rel_path.name in EXCLUDE_FILES:
         return True
     return any(part in EXCLUDE_DIRS for part in rel_path.parts if part not in (".", ""))
@@ -85,7 +110,7 @@ def normalized_text(path: Path) -> bytes:
 
 def add_script(zipf: zipfile.ZipFile, source: Path, arcname: str) -> None:
     info = zipfile.ZipInfo(arcname)
-    mtime = datetime.utcfromtimestamp(int(source.stat().st_mtime))
+    mtime = datetime.fromtimestamp(int(source.stat().st_mtime), timezone.utc)
     info.date_time = mtime.timetuple()[:6]
     info.external_attr = (stat.S_IFREG | 0o755) << 16
     zipf.writestr(info, normalized_text(source))
@@ -100,8 +125,10 @@ def build_bootstrap_bundle() -> None:
         add_script(zf, ROOT / "scripts" / "bootstrap.sh", "bootstrap.sh")
         add_script(zf, ROOT / "scripts" / "setup_local_supabase.sh", "setup_local_supabase.sh")
         add_regular_file(zf, PROJECT_ZIP, PROJECT_ZIP.name)
-        add_regular_file(zf, ROOT / "README.md", "README.md")
-        add_regular_file(zf, ROOT / "COMMANDS_REFERENCE.md", "COMMANDS_REFERENCE.md")
+        for doc_name in ("README.md", "DEPLOYMENT.md", "README_BACKEND_VPS_QUICKSTART.md"):
+            doc_path = ROOT / doc_name
+            if doc_path.exists():
+                add_regular_file(zf, doc_path, doc_name)
 
 
 def main() -> None:

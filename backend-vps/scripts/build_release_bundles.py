@@ -33,6 +33,25 @@ EXCLUDE_DIRS = {
 }
 EXCLUDE_FILE_SUFFIXES = {".pyc", ".pyo"}
 EXCLUDE_FILE_NAMES = {".DS_Store", "Thumbs.db"}
+EXCLUDE_PATH_PREFIXES = {
+    Path("docker/authelia"),
+    Path("docker/internal-tls"),
+    Path("docker/vault/bootstrap"),
+    Path("docker/vault/data"),
+    Path("data"),
+    Path("knowledge_graph"),
+    Path("research_output"),
+    Path("temp_images"),
+    Path("supabase/.temp"),
+}
+
+
+def _has_prefix(path: Path, prefix: Path) -> bool:
+    return path == prefix or prefix in path.parents
+
+
+def _is_excluded_rel(rel_path: Path) -> bool:
+    return any(_has_prefix(rel_path, prefix) for prefix in EXCLUDE_PATH_PREFIXES)
 
 
 def _copy_item(src: Path, dst: Path) -> None:
@@ -62,8 +81,18 @@ def _add_dir_to_targz(tar_path: Path, src_dir: Path) -> None:
 
 def _ignore_names(path: str, names: list[str]) -> set[str]:
     ignored: set[str] = set()
+    path_obj = Path(path)
+    try:
+        rel_root = path_obj.relative_to(ROOT)
+    except ValueError:
+        rel_root = Path(".")
+
     for name in names:
         p = Path(path) / name
+        rel = rel_root / name if str(rel_root) != "." else Path(name)
+        if name == ".env" or _is_excluded_rel(rel):
+            ignored.add(name)
+            continue
         if name in EXCLUDE_DIRS or name.endswith(".egg-info"):
             ignored.add(name)
             continue

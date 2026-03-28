@@ -10,7 +10,7 @@ usage() {
 Usage:
   bash scripts/authelia_user_manage.sh list
   bash scripts/authelia_user_manage.sh add <username> [display_name] [email] [groups_csv]
-  bash scripts/authelia_user_manage.sh rotate-password <username>
+  bash scripts/authelia_user_manage.sh rotate-password <username> [--password-stdin]
   bash scripts/authelia_user_manage.sh enable <username>
   bash scripts/authelia_user_manage.sh disable <username>
   bash scripts/authelia_user_manage.sh delete <username>
@@ -19,6 +19,7 @@ Notes:
 - Passwords are read securely from stdin/TTY and never written to .env.
 - This script edits docker/authelia/users_database.yml directly.
 - Authelia is restarted automatically if its container is running.
+- `--password-stdin` reads a single password line from stdin (no prompt), useful for special characters.
 USAGE
 }
 
@@ -57,20 +58,38 @@ ensure_authelia_dir_writable() {
 
 hash_password() {
   local password="$1"
-  docker run --rm authelia/authelia:latest \
+  local digest
+  digest="$(docker run --rm authelia/authelia:latest \
     authelia crypto hash generate argon2 --password "${password}" --no-confirm \
-    | awk -F'Digest: ' '/Digest: / {print $2; exit}'
+    | awk -F'Digest: ' '/Digest: / {print $2; exit}')"
+  [[ -n "${digest}" ]] || return 1
+  docker run --rm authelia/authelia:latest \
+    authelia crypto hash validate --password "${password}" -- "${digest}" >/dev/null 2>&1 || return 1
+  printf '%s' "${digest}"
 }
 
 prompt_password() {
   local p1 p2
-  read -rs -p "Password: " p1
+  IFS= read -r -s -p "Password: " p1
   echo
-  read -rs -p "Confirm password: " p2
+  IFS= read -r -s -p "Confirm password: " p2
   echo
+  p1="${p1%$'\r'}"
+  p2="${p2%$'\r'}"
   [[ -n "${p1}" ]] || die "Password cannot be empty"
   [[ "${p1}" == "${p2}" ]] || die "Passwords do not match"
   printf '%s' "${p1}"
+}
+
+read_password_stdin() {
+  local line
+  if [[ -t 0 ]]; then
+    die "--password-stdin requires piped stdin."
+  fi
+  IFS= read -r line || true
+  line="${line%$'\r'}"
+  [[ -n "${line}" ]] || die "Password cannot be empty"
+  printf '%s' "${line}"
 }
 
 ensure_users_file() {
@@ -227,8 +246,15 @@ main() {
       ;;
     rotate-password)
       [[ -n "${username}" ]] || die "Username is required"
-      local password password_hash
-      password="$(prompt_password)"
+      local password password_hash stdin_flag="${3:-}"
+      if [[ -n "${stdin_flag}" && "${stdin_flag}" != "--password-stdin" ]]; then
+        die "Unknown option for rotate-password: ${stdin_flag}"
+      fi
+      if [[ "${stdin_flag}" == "--password-stdin" ]]; then
+        password="$(read_password_stdin)"
+      else
+        password="$(prompt_password)"
+      fi
       password_hash="$(hash_password "${password}")"
       [[ -n "${password_hash}" ]] || die "Failed to generate password hash"
       python_edit_users rotate-password "${username}" "" "" "" "${password_hash}"

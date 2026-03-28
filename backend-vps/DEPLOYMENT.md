@@ -144,10 +144,13 @@ Authelia bootstrap generates missing local secrets automatically:
 - `AUTHELIA_AUTH_PASSWORD` and `AUTHELIA_OIDC_CLIENT_SECRET`: 24-char alphanumeric
 - `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_ENCRYPTION_KEY`, `AUTHELIA_JWT_SECRET`, `AUTHELIA_OIDC_HMAC_SECRET`: 64-char hex (32 random bytes each)
 - `docker/authelia/oidc_jwks_rs256.pem`: RSA-2048 signing key
+- `docker/authelia/runtime/`: writable Authelia state (`db.sqlite3`, `notification.txt`)
 - `AUTHELIA_VAULT_OIDC_CLIENT_SECRET`: Vault UI OIDC client secret (24-char alphanumeric)
 
 Default behavior after bootstrap:
 - `AUTHELIA_USERS_SOURCE=file` keeps user auth in `docker/authelia/users_database.yml` so plaintext passwords do not need to remain in `.env`
+- Authelia runs unprivileged via `AUTHELIA_CONTAINER_UID`/`AUTHELIA_CONTAINER_GID` (auto-set on bootstrap when missing).
+- Authelia mounts `configuration.yml`, `users_database.yml`, and `oidc_jwks_rs256.pem` read-only inside the container; only `docker/authelia/runtime/` is writable.
 - Login username is in `AUTHELIA_AUTH_USERNAME` (defaults to `gateway-admin`)
 - Login password is generated/stored in `AUTHELIA_AUTH_PASSWORD` only for first bootstrap or when `AUTHELIA_USERS_SOURCE=env`
 - Login regulation: 3 failed attempts then 20 minute cooldown (IP-based, to avoid user-target lockout abuse)

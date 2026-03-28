@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 AUTHELIA_DIR="${ROOT_DIR}/docker/authelia"
+AUTHELIA_RUNTIME_DIR="${AUTHELIA_DIR}/runtime"
 AUTHELIA_CONFIG="${AUTHELIA_DIR}/configuration.yml"
 AUTHELIA_USERS="${AUTHELIA_DIR}/users_database.yml"
 AUTHELIA_OIDC_JWKS_KEY_PATH="${AUTHELIA_DIR}/oidc_jwks_rs256.pem"
@@ -14,9 +15,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 ensure_authelia_dir_writable() {
-  mkdir -p "${AUTHELIA_DIR}"
+  mkdir -p "${AUTHELIA_DIR}" "${AUTHELIA_RUNTIME_DIR}"
   if touch "${AUTHELIA_DIR}/.perm_check" 2>/dev/null; then
+    touch "${AUTHELIA_RUNTIME_DIR}/.perm_check"
     rm -f "${AUTHELIA_DIR}/.perm_check"
+    rm -f "${AUTHELIA_RUNTIME_DIR}/.perm_check"
     return 0
   fi
 
@@ -24,7 +27,9 @@ ensure_authelia_dir_writable() {
     echo "Authelia directory is not writable; attempting ownership repair with sudo..."
     sudo chown -R "$(id -u):$(id -g)" "${AUTHELIA_DIR}"
     touch "${AUTHELIA_DIR}/.perm_check"
+    touch "${AUTHELIA_RUNTIME_DIR}/.perm_check"
     rm -f "${AUTHELIA_DIR}/.perm_check"
+    rm -f "${AUTHELIA_RUNTIME_DIR}/.perm_check"
     return 0
   fi
 
@@ -57,6 +62,17 @@ set_env() {
     }
   ' "${ENV_FILE}" > "${tmp}"
   mv "${tmp}" "${ENV_FILE}"
+}
+
+ensure_path_owner() {
+  local owner="$1"
+  local target="$2"
+  if chown "${owner}" "${target}" 2>/dev/null; then
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo chown "${owner}" "${target}" >/dev/null 2>&1 || true
+  fi
 }
 
 is_true() {
@@ -221,6 +237,15 @@ users_file_has_entries() {
 }
 
 init_vault_access
+
+AUTHELIA_CONTAINER_UID="$(get_env AUTHELIA_CONTAINER_UID)"
+AUTHELIA_CONTAINER_GID="$(get_env AUTHELIA_CONTAINER_GID)"
+if [[ -z "${AUTHELIA_CONTAINER_UID}" || -z "${AUTHELIA_CONTAINER_GID}" ]]; then
+  AUTHELIA_CONTAINER_UID="$(stat -c '%u' "${AUTHELIA_DIR}" 2>/dev/null || id -u)"
+  AUTHELIA_CONTAINER_GID="$(stat -c '%g' "${AUTHELIA_DIR}" 2>/dev/null || id -g)"
+  set_env AUTHELIA_CONTAINER_UID "${AUTHELIA_CONTAINER_UID}"
+  set_env AUTHELIA_CONTAINER_GID "${AUTHELIA_CONTAINER_GID}"
+fi
 
 PUBLIC_DOMAIN="$(get_env PUBLIC_DOMAIN)"
 if [[ -z "${PUBLIC_DOMAIN}" ]]; then
@@ -515,7 +540,7 @@ regulation:
 storage:
   encryption_key: ${AUTHELIA_STORAGE_ENCRYPTION_KEY}
   local:
-    path: /config/db.sqlite3
+    path: /config/runtime/db.sqlite3
 
 identity_validation:
   reset_password:
@@ -523,12 +548,19 @@ identity_validation:
 
 notifier:
   filesystem:
-    filename: /config/notification.txt
+    filename: /config/runtime/notification.txt
 EOF
 
 chmod 600 "${AUTHELIA_CONFIG}" "${AUTHELIA_OIDC_JWKS_KEY_PATH}" || true
 if [[ -f "${AUTHELIA_USERS}" ]]; then
   chmod 600 "${AUTHELIA_USERS}" || true
+fi
+chmod 700 "${AUTHELIA_RUNTIME_DIR}" || true
+ensure_path_owner "${AUTHELIA_CONTAINER_UID}:${AUTHELIA_CONTAINER_GID}" "${AUTHELIA_RUNTIME_DIR}"
+ensure_path_owner "${AUTHELIA_CONTAINER_UID}:${AUTHELIA_CONTAINER_GID}" "${AUTHELIA_CONFIG}"
+ensure_path_owner "${AUTHELIA_CONTAINER_UID}:${AUTHELIA_CONTAINER_GID}" "${AUTHELIA_OIDC_JWKS_KEY_PATH}"
+if [[ -f "${AUTHELIA_USERS}" ]]; then
+  ensure_path_owner "${AUTHELIA_CONTAINER_UID}:${AUTHELIA_CONTAINER_GID}" "${AUTHELIA_USERS}"
 fi
 
 echo "Authelia bootstrap complete."

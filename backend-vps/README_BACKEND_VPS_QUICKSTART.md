@@ -58,7 +58,7 @@ sg docker -c 'cd /home/user1/study-agents/backend-vps && bash scripts/bootstrap_
 
 ```bash
 sg docker -c 'cd /home/user1/study-agents/backend-vps && PATH=$HOME/.local/bin:$PATH bash scripts/setup_local_supabase.sh'
-psql "$(awk -F= '/^SUPABASE_DB_URL=/{print $2}' .env)" -v ON_ERROR_STOP=1 -f supabase_schema.sql
+psql "$(awk -F= '/^SUPABASE_DB_URL=/{sub(/^[^=]*=/, ""); print; exit}' .env)" -v ON_ERROR_STOP=1 -f supabase_schema.sql
 ```
 
 If the local Supabase API port is HTTPS-only, the script now writes:
@@ -75,6 +75,12 @@ This now enforces Vault-first runtime by default:
 - synced runtime/Ollama/Authelia secrets are scrubbed from `.env`
 - pre-scrub backup is written under `docker/vault/bootstrap/env-pre-vault-scrub-<timestamp>.bak`
 - plaintext env fallback is disabled unless `ALLOW_PLAINTEXT_ENV_SECRETS=true`
+- AppRole runtime files are used by services for secret hydration (`docker/vault/runtime/{role_id,secret_id}`)
+
+Authelia hardening defaults after bootstrap:
+- runs unprivileged (`AUTHELIA_CONTAINER_UID` / `AUTHELIA_CONTAINER_GID`; auto-set by bootstrap when missing)
+- mounts `configuration.yml`, `users_database.yml`, and `oidc_jwks_rs256.pem` read-only in container
+- keeps writable state only in `docker/authelia/runtime/` (`db.sqlite3`, notifier output)
 
 ## 7) Start backend
 
@@ -108,6 +114,13 @@ Validate Vault UI + OIDC popup routes explicitly:
 ```bash
 bash scripts/install_backend_vps.sh validate-gateway-oidc 10.72.72.161
 ```
+
+This step updates:
+- `PUBLIC_DOMAIN`
+- `AUTHELIA_OIDC_CLIENT_REDIRECT_URI`
+- `AUTHELIA_VAULT_OIDC_CLIENT_REDIRECT_URI`
+- `GATEWAY_ALLOWED_CIDRS`
+- and recreates `authelia` + `tls-gateway`
 
 Open:
 - `https://10.72.72.161/`
@@ -149,7 +162,7 @@ After import, restart browser and open `https://10.72.72.161/`.
 sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml ps'
 
 # logs
-sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml logs -f cag-service rag-service copilot-service tls-gateway'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml logs -f cag-service rag-service copilot-service authelia tls-gateway'
 
 # stop
 sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml down'
@@ -162,14 +175,31 @@ This deployment currently uses Authelia filesystem notifier (not SMTP email), so
 If the browser shows Identity Verification and no email arrives:
 
 ```bash
-sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml exec -T authelia sh -lc "grep -E \"^[A-Z0-9]{8}$\" /config/notification.txt | tail -n 1"'
+sg docker -c 'cd /home/user1/study-agents/backend-vps && docker compose -f docker-compose.yml -f docker-compose.zimaboard.yml exec -T authelia sh -lc "grep -E \"^[A-Z0-9]{8}$\" /config/runtime/notification.txt | tail -n 1"'
 ```
 
 Important:
 - Do not close/cancel the browser identity verification dialog before entering the code; closing invalidates that code.
 - If the code expired, trigger a new code in the UI and run the command again.
 
-## 13) If build fails with `No space left on device`
+## 13) Manage gateway-admin safely (no plaintext `.env`)
+
+```bash
+cd /home/user1/study-agents/backend-vps
+bash scripts/authelia_user_manage.sh list
+bash scripts/authelia_user_manage.sh rotate-password gateway-admin
+bash scripts/authelia_user_manage.sh add admin2 "Admin Two" admin2@local admins
+```
+
+If renaming the default account, add the new account first, confirm login works, then disable/delete old:
+
+```bash
+bash scripts/authelia_user_manage.sh disable gateway-admin
+# or:
+bash scripts/authelia_user_manage.sh delete gateway-admin
+```
+
+## 14) If build fails with `No space left on device`
 
 Run:
 

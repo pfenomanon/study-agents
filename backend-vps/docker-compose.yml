@@ -156,10 +156,18 @@ services:
 
   authelia:
     image: authelia/authelia:latest
+    user: "${AUTHELIA_CONTAINER_UID:-1000}:${AUTHELIA_CONTAINER_GID:-1000}"
     depends_on:
       - redis
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
-      - ./docker/authelia:/config
+      - ./docker/authelia/configuration.yml:/config/configuration.yml:ro
+      - ./docker/authelia/users_database.yml:/config/users_database.yml:ro
+      - ./docker/authelia/oidc_jwks_rs256.pem:/config/oidc_jwks_rs256.pem:ro
+      - ./docker/authelia/runtime:/config/runtime
       - ./docker/internal-tls:/tls:ro
     networks:
       - backend

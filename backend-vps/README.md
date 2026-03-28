@@ -290,6 +290,7 @@ Press `Ctrl+C` to stop every managed process gracefully.
 - Containers drop root privileges (`USER app`). Bind only required ports; the default compose uses an internal `backend` network.
 - TLS is terminated on the machine via `tls-gateway` (Caddy). Point `PUBLIC_DOMAIN` DNS to the host and use `https://<domain>/...` from remote clients.
 - Keep direct service ports (`8000`, `8100`, `9010`) private; expose only the TLS gateway (`443`) for remote clients.
+- Authelia now runs as an unprivileged UID/GID (`AUTHELIA_CONTAINER_UID`/`AUTHELIA_CONTAINER_GID`) and mounts auth/config files read-only; only `docker/authelia/runtime/` is writable for `db.sqlite3` + notifier state.
 - Authelia user management without storing plaintext in `.env`:
   ```bash
   bash scripts/authelia_user_manage.sh list

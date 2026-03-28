@@ -171,6 +171,10 @@ else:
 
 backup = f"{path}.bak"
 shutil.copy2(path, backup)
+try:
+    os.chmod(backup, 0o600)
+except OSError:
+    pass
 
 with open(path, "w", encoding="utf-8") as f:
     yaml.safe_dump(
@@ -258,7 +262,7 @@ main() {
       ;;
   esac
 
-  chmod 600 "${USERS_FILE}" || true
+  chmod 600 "${USERS_FILE}" "${USERS_FILE}.bak" 2>/dev/null || true
   if (( needs_restart == 1 )); then
     restart_authelia_if_running
   fi

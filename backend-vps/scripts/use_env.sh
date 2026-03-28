@@ -14,6 +14,17 @@ is_true() {
   esac
 }
 
+set_private_umask() {
+  umask 077
+}
+
+restore_runtime_umask() {
+  local runtime_umask="${STUDY_AGENTS_RUNTIME_UMASK:-022}"
+  if ! umask "${runtime_umask}" 2>/dev/null; then
+    umask 022
+  fi
+}
+
 runtime_get() {
   local key="$1"
   [[ -f "${ENV_OUT}" ]] || return 0
@@ -207,11 +218,12 @@ PY
 
   now="$(date +%s)"
   expires="$((now + lease_duration - 30))"
-  umask 077
+  set_private_umask
   cat > "${VAULT_TOKEN_CACHE}" <<EOF_TOKEN
 {"token":"${token}","expires_at_epoch":${expires}}
 EOF_TOKEN
   chmod 600 "${VAULT_TOKEN_CACHE}" || true
+  restore_runtime_umask
 
   return 0
 }
@@ -308,7 +320,7 @@ if (( vault_first_mode == 0 )); then
   SCENARIO_SUPABASE_KEY="${SCENARIO_SUPABASE_KEY:-${plain_SCENARIO_SUPABASE_KEY}}"
 fi
 
-umask 077
+set_private_umask
 cat > "${ENV_OUT}" <<EOF_ENV
 OPENAI_API_KEY=${OPENAI_API_KEY}
 OLLAMA_API_KEY=${OLLAMA_API_KEY}
@@ -328,4 +340,5 @@ set -a
 . "${ENV_OUT}"
 set +a
 
+restore_runtime_umask
 exec "$@"

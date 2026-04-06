@@ -47,3 +47,11 @@ Backend token generation reference:
 - Transport encryption depends on your URL:
   - `https://...` => encrypted in transit (recommended)
   - `http://...` => not encrypted in transit except loopback/local-only usage
+
+## Profile Enforcement Notes
+
+- Windows script now prints `Profile ID` and `Context Length` from every response.
+- To require profile input client-side, add:
+  - Windows: `-RequireProfileId`
+- To require profile input server-side for `/cag-answer` and `/cag-ocr-answer`, set:
+  - `API_REQUIRE_PROFILE_ID=true`

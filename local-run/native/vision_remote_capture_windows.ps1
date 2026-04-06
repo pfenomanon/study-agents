@@ -16,6 +16,7 @@ param(
     [switch]$NoSessionWeb,
     [switch]$NoSessionWebOpen,
     [switch]$NoSessionWebQr,
+    [switch]$RequireProfileId,
     [switch]$Loop
 )
 
@@ -310,6 +311,32 @@ function Wait-ForCaptureTrigger {
 function Write-Result([string]$rawJson) {
     try {
         $obj = $rawJson | ConvertFrom-Json
+        $responseProfileId = ""
+        if ($null -ne $obj.profile_id) {
+            $responseProfileId = [string]$obj.profile_id
+        }
+        Write-Host ""
+        Write-Host "Profile ID:"
+        if ($responseProfileId) {
+            Write-Host $responseProfileId
+        }
+        else {
+            Write-Host "(none)"
+        }
+        if ($ProfileId -and -not $responseProfileId) {
+            Write-Warning ("Response did not include profile_id. Requested -ProfileId was '{0}'." -f $ProfileId)
+        }
+        elseif ($ProfileId -and $responseProfileId -and $responseProfileId.ToLowerInvariant() -ne $ProfileId.ToLowerInvariant()) {
+            Write-Warning ("Response profile_id '{0}' does not match requested -ProfileId '{1}'." -f $responseProfileId, $ProfileId)
+        }
+        Write-Host ""
+        Write-Host "Context Length:"
+        if ($null -ne $obj.context_length) {
+            Write-Host ([string]$obj.context_length)
+        }
+        else {
+            Write-Host "(missing)"
+        }
         if ($null -ne $obj.question -and $obj.question -ne "") {
             Write-Host ""
             Write-Host "Question:"
@@ -337,6 +364,9 @@ if (-not $ApiToken -and $env:REMOTE_API_TOKEN) {
 }
 if (-not $ProfileId -and $env:PROFILE_ID) {
     $ProfileId = $env:PROFILE_ID
+}
+if ($RequireProfileId -and -not $ProfileId) {
+    throw "Profile enforcement enabled: provide -ProfileId or set PROFILE_ID."
 }
 
 try {

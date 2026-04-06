@@ -47,6 +47,12 @@ API_REQUIRE_TOKEN = os.getenv("API_REQUIRE_TOKEN", "true").strip().lower() in {
     "yes",
     "on",
 }
+API_REQUIRE_PROFILE_ID = os.getenv("API_REQUIRE_PROFILE_ID", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 TRUSTED_PROXY_CIDRS = parse_trusted_proxy_networks(os.getenv("TRUSTED_PROXY_CIDRS"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", "10485760"))  # 10MB default
 API_RATE_LIMIT_PER_MINUTE = int(os.getenv("API_RATE_LIMIT_PER_MINUTE", "120"))
@@ -115,6 +121,11 @@ def _parse_profile_id(value: Optional[str]) -> Optional[str]:
 
 
 def _resolve_effective_profile_id(explicit_profile_id: Optional[str]) -> Optional[str]:
+    if API_REQUIRE_PROFILE_ID and not explicit_profile_id:
+        raise ValueError(
+            "profile_id is required for this endpoint. "
+            "Provide profile_id in the request body/form-data."
+        )
     # Honor explicit request first; otherwise use active/default profile context
     # only when configured by profile namespace state.
     return resolve_profile_id(explicit_profile_id, allow_default=False)

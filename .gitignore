@@ -21,3 +21,13 @@ local-run/study-agents/research_output/
 
 # Packaging artifacts
 *.egg-info/
+
+# Security-sensitive local TLS artifacts
+backend-vps/supabase/certs/
+backend-vps/supabase/signing_keys.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore

@@ -1,6 +1,8 @@
 # Supabase
 .branches
 .temp
+certs/
+signing_keys.json
 
 # dotenvx
 .env.keys
